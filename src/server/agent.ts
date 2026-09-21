@@ -1,9 +1,51 @@
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { query, type HookCallback } from '@anthropic-ai/claude-agent-sdk'
 import type { EditRequest } from '../shared/protocol.ts'
+import { checkWritePath } from './security.ts'
 
 /** File edits are the point; shell access is not, so it stays blocked. */
 const ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Grep', 'Glob']
 const DISALLOWED_TOOLS = ['Bash', 'WebFetch', 'WebSearch']
+/** Tools that write a file, and the input field holding its path. */
+const WRITE_PATH_FIELD: Record<string, string> = {
+  Write: 'file_path',
+  Edit: 'file_path',
+  MultiEdit: 'file_path',
+  NotebookEdit: 'notebook_path',
+}
+
+/**
+ * The trust boundary for the chat agent. It is a PreToolUse hook, not
+ * `canUseTool`: the SDK never consults `canUseTool` for tools auto-approved by
+ * `allowedTools` or by the user's own settings, while hooks run first for
+ * every call and their deny wins over any allow.
+ *
+ * `cwd` is not a sandbox, so the path is checked here. Tools beyond the list
+ * above (MCP servers and plugins from the user's settings) are refused too —
+ * they are another way to write outside the project.
+ */
+function toolGuard(projectDir: string): HookCallback {
+  return async (input) => {
+    if (input.hook_event_name !== 'PreToolUse') return {}
+    const name = input.tool_name
+    let reason: string | null = null
+    if (!ALLOWED_TOOLS.includes(name)) {
+      reason = `инструмент ${name} layout-debug агенту не выдан; доступны: ${ALLOWED_TOOLS.join(', ')}`
+    } else if (WRITE_PATH_FIELD[name]) {
+      const target = (input.tool_input as Record<string, unknown> | null)?.[WRITE_PATH_FIELD[name]!]
+      const verdict = checkWritePath(projectDir, target)
+      if (!verdict.ok) reason = verdict.reason
+    }
+    if (!reason) return {}
+    console.warn(`[layout-debug] агенту отказано (${name}): ${reason}`)
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: `layout-debug: ${reason}`,
+      },
+    }
+  }
+}
 
 export function buildPrompt(req: EditRequest): string {
   const n = req.node
@@ -113,6 +155,10 @@ export async function* runAgent(req: EditRequest, projectDir: string): AsyncGene
         cwd: projectDir,
         allowedTools: ALLOWED_TOOLS,
         disallowedTools: DISALLOWED_TOOLS,
+        hooks: { PreToolUse: [{ hooks: [toolGuard(projectDir)] }] },
+        // 'project' brings the target's CLAUDE.md; the user's ~/.claude (hooks, MCP,
+        // plugins) and settings.local.json stay out of a tool-driven agent.
+        settingSources: ['project'],
         maxTurns: 24,
       },
     })

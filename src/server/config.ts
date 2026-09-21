@@ -18,7 +18,7 @@ export interface Config {
 
 const DEFAULTS: Config = {
   target: 'web',
-  targetUrl: `http://localhost:${SERVER_PORT}/demo/`,
+  targetUrl: `http://127.0.0.1:${SERVER_PORT}/demo/`,
   projectDir: null,
   androidPort: 8790,
   device: null,

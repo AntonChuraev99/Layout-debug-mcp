@@ -186,7 +186,7 @@ export function App() {
       {!isAndroid && url && !web.connected && (
         <div className="banner">
           Инспектор не отозвался. Добавь в страницу:{' '}
-          <code>&lt;script src="http://localhost:5175/inspector.js"&gt;&lt;/script&gt;</code>
+          <code>&lt;script src="http://127.0.0.1:5175/inspector.js"&gt;&lt;/script&gt;</code>
         </div>
       )}
       {isAndroid && !state.androidSnapshot && (

@@ -9,8 +9,10 @@ import type { ChatMessage, ServerToUi, UiToServer } from '../shared/protocol.ts'
 import { runAgent } from './agent.ts'
 import { AndroidAdapter } from './android.ts'
 import { loadConfig } from './config.ts'
+import { checkApiRequest, checkStaticRequest, checkWsUpgrade } from './security.ts'
 import { Session } from './session.ts'
 
+const LISTEN_HOST = '127.0.0.1'
 const ROOT = resolve(fileURLToPath(import.meta.url), '../../..')
 const INSPECTOR_BUNDLE = join(ROOT, 'dist/inspector/inspector.js')
 const DEMO_DIR = join(ROOT, 'demo')
@@ -35,19 +37,30 @@ const MIME: Record<string, string> = {
 // --- http -------------------------------------------------------------------
 
 const http = createServer((req, res) => {
-  const url = new URL(req.url ?? '/', `http://localhost:${SERVER_PORT}`)
+  const url = new URL(req.url ?? '/', `http://${LISTEN_HOST}:${SERVER_PORT}`)
 
-  // The inspector is loaded by a page on a different origin.
-  res.setHeader('Access-Control-Allow-Origin', '*')
+  // The API sends no CORS headers: the window reaches /api through the Vite proxy
+  // (same origin) and the MCP process is not a browser, so a page on any other
+  // origin gets neither a readable /api response nor a side effect. The one CORS
+  // exception is the public inspector.js (see serveInspector).
+  const isApi = url.pathname.startsWith('/api/')
+  const verdict = isApi ? checkApiRequest(req.headers) : checkStaticRequest(req.headers)
+  if (!verdict.ok) return reject(req, res, verdict.reason, isApi)
 
   if (url.pathname === '/inspector.js') return serveInspector(res)
   if (url.pathname.startsWith('/demo')) return serveDemo(url.pathname, res)
   if (url.pathname === '/api/android/screenshot') return void serveAndroidScreenshot(res)
-  if (url.pathname.startsWith('/api/')) return serveApi(url.pathname, req, res)
+  if (isApi) return serveApi(url.pathname, req, res)
 
   res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
   res.end('layout-debug server. UI живёт на http://localhost:' + UI_PORT)
 })
+
+function reject(req: IncomingMessage, res: ServerResponse, reason: string, asJson: boolean) {
+  console.warn(`[layout-debug] отклонён ${req.method} ${req.url}: ${reason}`)
+  res.writeHead(403, { 'content-type': asJson ? MIME['.json']! : 'text/plain; charset=utf-8' })
+  res.end(asJson ? JSON.stringify({ error: reason }) : reason)
+}
 
 function serveInspector(res: ServerResponse) {
   if (!existsSync(INSPECTOR_BUNDLE)) {
@@ -57,7 +70,13 @@ function serveInspector(res: ServerResponse) {
     )
     return
   }
-  res.writeHead(200, { 'content-type': MIME['.js']!, 'cache-control': 'no-store' })
+  res.writeHead(200, {
+    'content-type': MIME['.js']!,
+    'cache-control': 'no-store',
+    // Public code with nothing secret in it; lets a page load it with
+    // `crossorigin` or as a module, which a plain <script src> does not need.
+    'access-control-allow-origin': '*',
+  })
   createReadStream(INSPECTOR_BUNDLE).pipe(res)
 }
 
@@ -181,7 +200,19 @@ function serveApi(pathname: string, req: IncomingMessage, res: ServerResponse) {
 
 // --- websocket --------------------------------------------------------------
 
-const wss = new WebSocketServer({ server: http, path: '/ws' })
+const wss = new WebSocketServer({
+  server: http,
+  path: '/ws',
+  // WebSockets are exempt from CORS: without this any open tab could drive the agent.
+  verifyClient: ({ req }, done) => {
+    const verdict = checkWsUpgrade(req.headers)
+    if (verdict.ok) return done(true)
+    console.warn(`[layout-debug] отклонён WebSocket: ${verdict.reason}`)
+    done(false, 403, 'Forbidden')
+  },
+})
+// Listen errors (port taken) reach ws too; they are reported once, on `http` below.
+wss.on('error', () => {})
 
 function send(ws: WebSocket, msg: ServerToUi) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg))
@@ -338,8 +369,23 @@ async function handleSubmit(ws: WebSocket, comment: string) {
   send(ws, { t: 'chatDone' })
 }
 
-http.listen(SERVER_PORT, async () => {
-  console.log(`[layout-debug] сервер http://localhost:${SERVER_PORT}`)
+http.on('error', (err: NodeJS.ErrnoException) => {
+  const why =
+    err.code === 'EADDRINUSE'
+      ? `порт ${SERVER_PORT} уже занят — скорее всего, сервер layout-debug уже запущен. ` +
+        `Останови его или найди процесс: ${
+          process.platform === 'win32' ? `netstat -ano | findstr ${SERVER_PORT}` : `lsof -i :${SERVER_PORT}`
+        }`
+      : err.code === 'EACCES'
+        ? `нет прав слушать порт ${SERVER_PORT}`
+        : err.message
+  console.error(`[layout-debug] сервер не запустился: ${why}`)
+  process.exit(1)
+})
+
+// Loopback only: the API drives an agent with write access and exposes the phone's screen.
+http.listen(SERVER_PORT, LISTEN_HOST, async () => {
+  console.log(`[layout-debug] сервер http://${LISTEN_HOST}:${SERVER_PORT}`)
   if (android) {
     const devices = await AndroidAdapter.devices().catch(() => [])
     console.log(`[layout-debug] цель: android, порт агента ${config.androidPort}`)

@@ -4,7 +4,7 @@
  *   2. apply live overrides so the real page moves while the user drags
  *
  * Loaded as a plain classic script:
- *   <script src="http://localhost:5175/inspector.js"></script>
+ *   <script src="http://127.0.0.1:5175/inspector.js"></script>
  * Dev-only. It talks to the parent frame and to nothing else.
  */
 
@@ -20,6 +20,7 @@ import {
   type StyleDigest,
   type UiToInspector,
 } from '../shared/protocol.ts'
+import { UI_ORIGINS } from '../shared/ports.ts'
 
 const MAX_NODES = 4000
 const SKIP_TAGS = new Set([
@@ -64,8 +65,23 @@ function idOf(el: Element): NodeId {
   return id
 }
 
+/**
+ * The page is only ever talking to the layout-debug window. Any other site could
+ * frame the same dev page, and a snapshot is the whole visible DOM, so messages
+ * go out addressed to the window's origin, never `'*'`.
+ *
+ * Which of the allowed origins it is gets pinned by `ancestorOrigins`
+ * (Chromium, WebKit) or by the first message the window sends. Until then each
+ * candidate is tried and the browser drops the ones that do not match.
+ */
+let parentOrigin: string | null = (() => {
+  const origin = location.ancestorOrigins?.[0]
+  return origin && UI_ORIGINS.includes(origin) ? origin : null
+})()
+
 function post(msg: InspectorToUi) {
-  window.parent.postMessage(msg, '*')
+  if (window.parent === window) return
+  for (const origin of parentOrigin ? [parentOrigin] : UI_ORIGINS) window.parent.postMessage(msg, origin)
 }
 
 // --- snapshot ---------------------------------------------------------------
@@ -267,8 +283,11 @@ function scheduleCapture(delay = 120) {
 }
 
 window.addEventListener('message', (event: MessageEvent) => {
+  // Commands move and hide real elements: only the framing layout-debug window may send them.
+  if (event.source !== window.parent || !UI_ORIGINS.includes(event.origin)) return
   const data = event.data as UiToInspector | undefined
   if (!data || typeof data !== 'object' || data.tag !== PROTOCOL_TAG || data.from !== 'ui') return
+  parentOrigin = event.origin
 
   switch (data.t) {
     case 'capture':
