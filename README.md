@@ -1,10 +1,37 @@
 # layout-debug-mcp
 
-Выделяешь слой на живом UI, двигаешь его мышью — **экран реально меняется**, — потом описываешь правку словами, и агент вносит её в исходники.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)
+[![Status](https://img.shields.io/badge/status-pre--1.0-orange.svg)](#roadmap)
 
-Две цели, одно окно: **веб** (настоящий DOM) и **Android** (Compose через adb). Формат снапшота общий, поэтому чат, артефакты для агента и MCP одинаковы для обеих.
+**Point at a layer in a running UI, drag it — the real screen moves — then tell your AI agent what to change.**
+The agent gets the exact element (source `file:line` when available, anchors, box, parents, siblings, your live tweaks) instead of a vague description.
 
-## Запуск (веб)
+One window, two targets, one snapshot format:
+
+- **Web** — any real DOM page on your dev server (React, Vue, plain HTML; Tailwind classes become strong grep anchors).
+- **Android** — Jetpack Compose / Compose Multiplatform on a device or emulator via `adb`: full composition tree with `file:line` from the compiler, and live overrides on the device without a rebuild.
+
+[Русская версия](./README.ru.md)
+
+> **What the tool sees.** It captures screenshots and the layout tree of the UI you point it at and hands them to the agent you connect. Don't run it against screens that show data you wouldn't paste into that agent.
+
+## Features
+
+- **Select any layer** — hover highlights, click selects; breadcrumbs go up to parents, the "Inside" list goes down to children. Works on wrappers and containers, not only on accessible nodes.
+- **Live edit** — drag to move, corner handle to resize. On the web it's inline styles; on Android the override is applied to the running composition, no Gradle build.
+- **Hand-off to an agent** — write a comment, send it; the element's artifacts go with it. Live tweaks are passed as a measured intent (delta in `dp` / `css-px`, box before and after, parent and siblings), with an instruction to express it via padding / gap / size in code.
+- **Two ways in** — an MCP server for any MCP client (Claude Code, Cursor, VS Code, …), or an optional built-in chat on the Claude Agent SDK.
+- **Local only** — window, server and MCP process run on your machine. No cloud, no telemetry.
+
+## Requirements
+
+- Node.js 20+
+- For Android: `adb` in `PATH`, an app built in **debug** with the on-device agent (see [Android](#android))
+
+## Quick start
+
+Try it on the bundled demo page — no configuration:
 
 ```bash
 git clone https://github.com/AntonChuraev99/Layout-debug-mcp.git
@@ -13,134 +40,234 @@ npm install
 npm run dev
 ```
 
-Поднимаются три процесса: сборка инспектора в watch-режиме, сервер на `5175`, UI на `5174`.
-Открой **http://localhost:5174** — по умолчанию там уже открыта демо-страница, на которой всё можно попробовать без настройки.
+Open **http://localhost:5174**. The demo page is already loaded: hover, click, drag, write a comment.
 
-## Подключение своего проекта
+`npm run dev` starts three processes: the inspector bundle in watch mode, the server on `127.0.0.1:5175`, and the UI on `5174`. **Keep it running** — the MCP server is a thin client of this server.
 
-1. В `index.html` (или в шаблон dev-сервера) добавь одну строку:
+Then [connect your MCP client](#connect-your-mcp-client) and ask the agent: *"take the pending layout requests and apply them"*.
+
+## Connect your MCP client
+
+The MCP server is a stdio process: `npx tsx <repo>/src/mcp/index.ts`. Use an **absolute path** to the cloned repo — clients don't start it from the repo directory.
+
+> One-command install (`npx layout-debug-mcp`, MCP Registry, Claude Code plugin) is on the [roadmap](#roadmap).
+
+### Claude Code
+
+```bash
+claude mcp add --transport stdio --scope user layout-debug -- npx tsx /abs/path/to/Layout-debug-mcp/src/mcp/index.ts
+```
+
+On native Windows `npx` needs a shell wrapper (PowerShell or cmd; in Git Bash write `cmd //c`, otherwise MSYS rewrites `/c` into a path):
+
+```powershell
+claude mcp add --transport stdio --scope user layout-debug -- cmd /c npx tsx C:/path/to/Layout-debug-mcp/src/mcp/index.ts
+```
+
+`--scope user` makes it available in every project. `--scope project` writes it into the project's shared `.mcp.json` — with an absolute path that only works on your machine.
+
+Check it: `claude mcp list` in a terminal, or `/mcp` inside a session. A server added mid-session shows up after the session restarts.
+
+### Cursor
+
+`~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
+
+```json
+{
+  "mcpServers": {
+    "layout-debug": {
+      "command": "npx",
+      "args": ["tsx", "/abs/path/to/Layout-debug-mcp/src/mcp/index.ts"]
+    }
+  }
+}
+```
+
+### VS Code
+
+`.vscode/mcp.json` — note the key is `servers` and `type` is required:
+
+```json
+{
+  "servers": {
+    "layout-debug": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["tsx", "/abs/path/to/Layout-debug-mcp/src/mcp/index.ts"]
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+`claude_desktop_config.json` (Windows: `%APPDATA%\Claude\`, macOS: `~/Library/Application Support/Claude/`):
+
+```json
+{
+  "mcpServers": {
+    "layout-debug": {
+      "command": "npx",
+      "args": ["tsx", "/abs/path/to/Layout-debug-mcp/src/mcp/index.ts"]
+    }
+  }
+}
+```
+
+### Codex CLI
+
+`~/.codex/config.toml`:
+
+```toml
+[mcp_servers.layout-debug]
+command = "npx"
+args = ["tsx", "/abs/path/to/Layout-debug-mcp/src/mcp/index.ts"]
+```
+
+### Windsurf, Gemini CLI, others
+
+Same `command` / `args` pair under `mcpServers` in the client's MCP config (Windsurf: `~/.codeium/windsurf/mcp_config.json`, Gemini CLI: `settings.json`).
+
+## Tools
+
+| Tool | What it does | Parameters |
+|---|---|---|
+| `layout_snapshot` | Tree of the latest snapshot: nodes, sizes, anchors for finding them in code. Depth-limited | `maxDepth` (1–30, default 8) |
+| `selected_element` | What the user has selected in the window right now: box, anchors, parent chain, live tweaks | — |
+| `pending_requests` | Requests sent from the window: comment + element artifacts + drag measurements | `includeConsumed` (default `false`), `markConsumed` (default `true`) |
+| `reply_in_window` | Writes to the window's chat — what changed, which files, what's left. The user watches the window, not the terminal | `text`, `role` (`assistant` \| `system`) |
+
+The first three read state, the last one adds to it. If the window is closed, the reply is kept and shown next time it opens.
+
+## Using the window
+
+| Action | What happens |
+|---|---|
+| Hover | Highlights the element under the cursor (the tightest box) |
+| Click | Selects the layer; breadcrumbs go up to parents, the "Inside" list goes down to children |
+| Drag | Moves the element **in the page / on the device**; the panel shows the offset |
+| Corner handle | Resizes |
+| Selection mode off | Clicks go to the page — press buttons and navigate the app |
+| Reset edits | Removes all live tweaks |
+| Send | Comment + artifacts go to the built-in agent, or to the queue for MCP |
+
+## Connect your own web project
+
+1. Add the inspector to your page, **dev only**:
 
    ```html
-   <script src="http://localhost:5175/inspector.js"></script>
+   <script src="http://127.0.0.1:5175/inspector.js"></script>
    ```
 
-   Только в dev. Инспектор общается исключительно с родительским окном, наружу ничего не ходит.
+   It talks only to the parent window (the tool's UI) and sends nothing anywhere else.
 
-2. Скопируй `layout-debug.config.example.json` в `layout-debug.config.json`:
+2. Copy `layout-debug.config.example.json` to `layout-debug.config.json` in the tool's directory:
 
    ```json
    {
      "targetUrl": "http://localhost:3000",
-     "projectDir": "C:/work/my-web-app"
+     "projectDir": "/abs/path/to/my-web-app"
    }
    ```
 
-   `projectDir` — репозиторий, который агенту разрешено править. Без него чат выключен, а правки копятся в очереди для MCP.
-   Обе настройки перебиваются переменными `LD_TARGET_URL` и `LD_PROJECT_DIR`.
+   `projectDir` is the repo the built-in chat agent may edit. Without it the chat is off and requests queue up for MCP.
 
-## Запуск (Android)
+For source mapping add a build step that writes `data-source-loc="file:line"` on JSX elements; without it the agent finds the element by `data-testid`, id and the class string.
 
-Нужны две вещи: агент внутри debug-сборки приложения и запуск инструмента в android-режиме.
+## Android
 
-**1. Агент в приложении.** Два файла. Пока они живут в приложении, на котором делался спайк, и ещё не вынесены в подключаемую библиотеку — это первый Android-пункт roadmap. Устройство агента:
+The on-device agent is a small debug-only component: it walks the real Compose tree via `ui-tooling` (`asTree()` gives boxes and compiler source info), serves it with a `PixelCopy` screenshot over HTTP, and applies live overrides. The tool reaches it through `adb forward`, which it sets up and re-establishes by itself.
 
-- `composeApp/src/androidMain/.../layoutdebug/LayoutDebugBridge.kt` — ~60 строк на одном `compose-runtime`. Публикует slot-таблицы через `LocalInspectionTables`. Инертен, пока агент не выставит `enabled`. Оборачивает контент в `MainActivity`:
+> **Status:** the agent works in a spike app and is **not yet packaged as a library**. Publishing it to Maven Central as a one-line `debugImplementation` is the next Android milestone. Until then Android mode is for early testers.
 
-  ```kotlin
-  setContent {
-      LayoutDebugRoot {
-          App()
-      }
-  }
-  ```
-
-- `androidApp/src/debug/kotlin/.../layoutdebug/` — сам агент: разбор дерева через `ui-tooling`, HTTP на `127.0.0.1:8790`, канал живых оверрайдов, скриншот через `PixelCopy`. Стартует сам через `ContentProvider` в `src/debug/AndroidManifest.xml`. Лежит в debug-source-set, поэтому **в релизной сборке этих классов физически нет**.
-
-  Требуется `debugImplementation("androidx.compose.ui:ui-tooling:<версия>")` в модуле приложения.
-
-**2. Запуск инструмента:**
-
-```powershell
-$env:LD_TARGET='android'
-$env:LD_DEVICE='emulator-5554'          # если устройств больше одного
-$env:LD_PROJECT_DIR='C:/work/my-app'
-npm --prefix "<путь-к-репозиторию>" run dev
-```
-
-`adb forward` инструмент ставит сам и переустанавливает при обрыве. Приложение должно быть запущено в debug-сборке.
-
-## Как пользоваться
-
-| Действие | Что происходит |
-|---|---|
-| Наведение | подсветка самого глубокого элемента под курсором |
-| Клик | выделение слоя; хлебные крошки сверху панели поднимают к родителю, список «Внутри» опускает к детям |
-| Перетаскивание | элемент двигается **в самой странице** (inline `translate`), панель показывает сдвиг |
-| Квадрат в углу рамки | изменение размера |
-| «Режим выделения» выкл. | клики уходят в страницу — можно нажимать кнопки и ходить по приложению |
-| «Сбросить правки» | снимает все живые сдвиги |
-| Отправка в чат | комментарий + артефакты уходят агенту (или в очередь) |
-
-Живые правки — это **превью**, а не код. Агенту они уходят как замер намерения с явной инструкцией вносить изменение через `padding`/`gap`/размеры, а не через `translate`.
-
-## Что получает агент
-
-Комментарий плюс: бокс элемента, `data-source-loc` (если сборка его проставляет), `data-testid`, полная строка классов, собственный текст, путь в дереве, ключевые computed-стили, цепочка родителей, соседи по родителю, бокс родителя и все живые сдвиги в css-px.
-
-Для Tailwind-проектов строка классов — самый сильный якорь для грепа: сочетание вроде `flex items-center gap-3 rounded-2xl px-4 py-3` обычно уникально по репозиторию.
-
-## MCP
-
-Второй вход — для случая, когда работаешь в терминальной сессии Claude Code:
+Run the tool in Android mode:
 
 ```bash
-claude mcp add layout-debug -- npx tsx <путь-к-репозиторию>/src/mcp/index.ts
+LD_TARGET=android LD_DEVICE=emulator-5554 LD_PROJECT_DIR=/abs/path/to/my-app npm run dev
 ```
 
-| Инструмент | Что делает |
+PowerShell:
+
+```powershell
+$env:LD_TARGET='android'; $env:LD_DEVICE='emulator-5554'; $env:LD_PROJECT_DIR='C:/path/to/my-app'; npm run dev
+```
+
+`LD_DEVICE` is needed only when more than one device is attached. The app must be running in a debug build.
+
+## Configuration
+
+Environment variables override `layout-debug.config.json`, which overrides defaults.
+
+| Env var | Config key | Default | Meaning |
+|---|---|---|---|
+| `LD_TARGET` | `target` | `web` | `web` or `android` |
+| `LD_TARGET_URL` | `targetUrl` | bundled demo | Page to inspect (web) |
+| `LD_PROJECT_DIR` | `projectDir` | — | Repo the built-in chat agent may edit; unset = chat off |
+| `LD_DEVICE` | `device` | — | `adb -s` serial (android) |
+| `LD_ANDROID_PORT` | `androidPort` | `8790` | On-device agent port (android) |
+| `LD_SERVER_URL` | — | `http://127.0.0.1:5175` | Where the MCP process finds the server |
+
+Ports: UI `5174`, server `5175`.
+
+## How it works
+
+```
+ target page / Android app          your machine
+ ┌────────────────────┐   postMessage / adb forward   ┌──────────────────────┐
+ │ inspector / agent  │ ◄───────────────────────────► │ server 127.0.0.1:5175│
+ └────────────────────┘                               │ snapshot · selection │
+                                                      │ request queue        │
+          ┌──────────────┐        WebSocket           └───┬──────────────┬───┘
+          │ UI :5174     │ ◄──────────────────────────────┘   local HTTP │
+          │ frame+overlay│                                ┌──────────────▼───┐
+          │ chat         │                                │ MCP stdio server │ ◄── your agent
+          └──────────────┘                                └──────────────────┘
+```
+
+Both adapters produce the same normalized snapshot — nodes with boxes in frame pixels, `pxPerUnit` to convert to `dp` / `css-px`, anchors (`sourceLoc`, test id, classes, text) and a flat bag of platform properties. The UI, the chat and MCP don't know which platform the data came from.
+
+## Security
+
+- The server listens on `127.0.0.1` only and checks `Origin` and `Host` on HTTP and WebSocket requests, so a web page open in your browser can't drive it (including via DNS rebinding).
+- The built-in chat agent may use only `Read`, `Edit`, `Write`, `Grep`, `Glob`; writes are limited to `projectDir`, and `.git/`, `.claude/`, `.mcp.json` and `.env*` are off limits. It loads the project's settings and `CLAUDE.md`, not your user-level Claude Code settings. Reads are not limited yet — see [SECURITY.md](./SECURITY.md) for known gaps.
+- Nothing leaves your machine except what goes to the agent you connect: through MCP, your client's agent; through the built-in chat, Claude via the Claude Agent SDK.
+- The web inspector is added only in dev. The Android agent lives in the debug source set; the spike app still keeps a small inert bridge in the main source set, which the library will split into `-agent` / `-noop` artifacts.
+
+Found a vulnerability? See [SECURITY.md](./SECURITY.md).
+
+## Limitations
+
+- Live edits are a **preview**, not code: they vanish on page reload or app rebuild.
+- Tool output, UI and prompts are in Russian for now; English is planned.
+- `npm audit` reports a moderate issue in `@hono/node-server`, a transitive dependency of the MCP SDK's HTTP transport. This project uses only the stdio transport, so that code never runs; downgrading the SDK breaks the Agent SDK's peer dependency.
+- **Web:** the page is shown in an `iframe` — a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes and synced at most once a second.
+- **Android:** the frame is a snapshot on request, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays — go up the breadcrumbs. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20. Element text isn't in the artifacts yet — `asTree()` doesn't expose it without parsing parameters; the `file:line` anchor is more precise anyway.
+
+## Troubleshooting
+
+| Symptom | Check |
 |---|---|
-| `layout_snapshot` | дерево последнего снимка, сжатое по глубине |
-| `selected_element` | что выделено прямо сейчас + живые правки |
-| `pending_requests` | очередь отправленных правок, помечает выданные прочитанными |
-| `reply_in_window` | пишет в чат окна — чем кончилась правка, какие файлы тронуты |
+| MCP tools answer "server unavailable" | `npm run dev` is running; `curl http://127.0.0.1:5175/api/health` returns `{"ok":true,…}` |
+| Client doesn't list the server | Absolute path in the config; `node -v` ≥ 20 in the environment the client starts from (GUI apps may have a different `PATH`); restart the session |
+| Windows: `spawn npx ENOENT` | Use the `cmd /c npx …` form |
+| Server exits with "port 5175 is taken" | Another instance or another dev server holds the port — stop it |
+| Window says the inspector didn't respond | The script tag is in the page, the target allows framing (`X-Frame-Options`, CSP `frame-ancestors`), CSP `script-src` allows `127.0.0.1:5175` |
 
-Первые три читают состояние, последний его дополняет: пользователь смотрит в окно, а не в терминал, и без ответа туда он не узнает, что агент сделал. Труба одна — локальный HTTP на `127.0.0.1:5175`, поэтому `npm run dev` должен быть запущен. Окно закрыто — сообщение всё равно сохранится и покажется при следующем открытии.
+## Roadmap
 
-Никакого облака для этого не нужно и не будет: окно, сервер и MCP-процесс живут на одной машине, а через облако пришлось бы гонять скриншоты приложения и куски исходников.
+Pre-1.0. Next up:
 
-## Границы
+1. Android agent as a published library (Maven Central, `debugImplementation`).
+2. One-command install: `npx`, MCP Registry, Claude Code plugin.
+3. Visible errors for every failure path (adb, device, empty tree, blocked iframe), English UI, tests and CI.
+4. Checked with Claude Code, Cursor, Codex CLI and VS Code.
 
-Общее:
+Later, driven by demand: Compose Desktop, Android Views, Flutter, live video stream from the device.
 
-- Живые правки — превью, не код: они исчезают при перезагрузке страницы или пересборке приложения.
-- Агенту разрешены только `Read/Edit/Write/Grep/Glob`; `Bash`, `WebFetch`, `WebSearch` заблокированы.
-- Первый клик после открытия окна может провалиться мимо: оверлей появляется вместе с первым снапшотом.
-- `npm audit` показывает moderate в `@hono/node-server` — транзитивная зависимость HTTP-транспорта MCP SDK. Мы используем только stdio-транспорт, этот код не исполняется; понижение SDK ломает peer-зависимость Agent SDK.
+## Contributing
 
-Веб:
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Bug reports and ideas — [issues](https://github.com/AntonChuraev99/Layout-debug-mcp/issues).
 
-- Страница открывается в `iframe`. Dev-серверы обычно не ставят `X-Frame-Options`, но если цель его шлёт, кадр не отрисуется.
-- Снимок дерева обрезается на 4000 узлах; дерево уходит на сервер не чаще раза в секунду, поэтому MCP может отставать от экрана на этот интервал.
-
-Android:
-
-- Кадр — снимок по запросу, а не видеопоток. После каждой правки он перезапрашивается; перетаскивание шлёт правку на устройство не чаще чем раз в 150 мс.
-- Двигается тот узел, который выделен. Выделишь внутренний `Row` — уедет содержимое, а фон и обрезка останутся на месте; поднимись по хлебным крошкам до внешнего узла.
-- Сдвиг живёт до ближайшей рекомпозиции этого composable: она перезапишет `Modifier` из исходника. Каждый пересбор дерева переприменяет активные правки.
-- Текста элемента в артефактах пока нет — `asTree()` его не отдаёт без разбора параметров. Якорь для агента — `file:line`, он и так точнее.
-- `@UiToolingDataApi` не даёт гарантий совместимости между версиями Compose. Проверено на Compose Multiplatform 1.11 / Kotlin 2.3.20.
-
-## Структура
-
-```
-src/shared/protocol.ts   формат снапшота и все сообщения — общий словарь трёх процессов
-src/inspector/           скрипт внутри целевой страницы: обход DOM + живые оверрайды
-src/ui/                  React-окно: iframe, оверлей, выделение, drag, чат
-src/server/              Node: состояние сессии, WebSocket, мост в Claude Agent SDK
-src/mcp/                 stdio MCP поверх HTTP-API сервера
-demo/                    страница для проверки без настройки
-```
-
-## Лицензия
+## License
 
 [MIT](./LICENSE)
