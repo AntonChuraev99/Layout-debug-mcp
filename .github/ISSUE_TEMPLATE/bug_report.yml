@@ -1,0 +1,60 @@
+name: Bug report
+description: Something doesn't work as described
+labels: [bug]
+body:
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target
+      options:
+        - Web
+        - Android
+        - Both / not target-specific
+    validations:
+      required: true
+  - type: dropdown
+    id: entry
+    attributes:
+      label: Where it happens
+      options:
+        - Window (selection, drag, overlay)
+        - Built-in chat
+        - MCP tools
+        - Setup / startup
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. npm run dev
+        2. Select ...
+        3. Drag ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node version, browser. Android — device/emulator and API level, Compose / Compose Multiplatform and Kotlin versions. MCP — client and its version.
+      placeholder: |
+        OS: Windows 11
+        Node: 22.x
+        Browser: Chrome 140
+        Android: Pixel 9 emulator, API 36, CMP 1.11, Kotlin 2.3.20
+        MCP client: Claude Code 2.x
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and screenshots
+      description: Server console output, the error banner in the window, browser console. Remove anything private.
+      render: text

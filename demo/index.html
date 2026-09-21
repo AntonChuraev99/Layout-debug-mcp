@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>demo target</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.5 ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+        background: #f4f5f7;
+        color: #1b1e24;
+        padding: 32px;
+      }
+      .page { max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+      .card {
+        background: #fff;
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 1px 3px rgba(20, 22, 26, 0.1), 0 8px 24px rgba(20, 22, 26, 0.06);
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .card__head { display: flex; align-items: center; gap: 12px; }
+      .avatar { width: 44px; height: 44px; border-radius: 50%; background: #4c8dff; flex-shrink: 0; }
+      .card__title { margin: 0; font-size: 17px; }
+      .card__sub { margin: 2px 0 0; color: #6b7280; font-size: 13px; }
+      .row { display: flex; justify-content: space-between; padding: 9px 0; border-top: 1px solid #eceef1; }
+      .row__label { color: #6b7280; }
+      .actions { display: flex; gap: 10px; }
+      .btn {
+        border: 0; border-radius: 10px; padding: 11px 18px; font: inherit; font-weight: 600; cursor: pointer;
+      }
+      .btn--primary { background: #4c8dff; color: #fff; flex: 1; }
+      .btn--ghost { background: #eceef1; color: #1b1e24; }
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      .chip { background: #eef2ff; color: #3b5bdb; border-radius: 999px; padding: 5px 12px; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="card" data-testid="subscription-card">
+        <div class="card__head">
+          <div class="avatar"></div>
+          <div>
+            <h1 class="card__title">Годовая подписка</h1>
+            <p class="card__sub">Продлится 14 августа</p>
+          </div>
+        </div>
+
+        <div class="rows">
+          <div class="row"><span class="row__label">Тариф</span><span>Pro</span></div>
+          <div class="row"><span class="row__label">Стоимость</span><span>4 990 ₽ / год</span></div>
+          <div class="row"><span class="row__label">Способ оплаты</span><span>•••• 4242</span></div>
+        </div>
+
+        <div class="chips">
+          <span class="chip">Без рекламы</span>
+          <span class="chip">Оффлайн</span>
+          <span class="chip">4 устройства</span>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn--primary" data-testid="cta-continue">Продолжить</button>
+          <button class="btn btn--ghost">Отмена</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card__title">Вторая карточка</h2>
+        <p class="card__sub">Нужна, чтобы было что таскать относительно соседей.</p>
+      </section>
+    </main>
+
+    <script src="http://127.0.0.1:5175/inspector.js"></script>
+  </body>
+</html>

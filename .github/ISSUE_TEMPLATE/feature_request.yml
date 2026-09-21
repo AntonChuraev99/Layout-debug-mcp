@@ -1,0 +1,30 @@
+name: Feature request
+description: A new platform, tool or workflow
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation and what gets in the way today. A concrete screen or workflow helps more than a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Web
+        - Android Compose
+        - Android Views
+        - Compose Desktop
+        - Flutter
+        - React Native
+        - iOS
+        - Other
+    validations:
+      required: true
