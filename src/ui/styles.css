@@ -1,0 +1,379 @@
+:root {
+  --bg: #14161a;
+  --bg-2: #1b1e24;
+  --line: #2b3038;
+  --fg: #e6e8ec;
+  --muted: #8b93a1;
+  --accent: #4c8dff;
+  --accent-soft: rgba(76, 141, 255, 0.16);
+  --warn: #ffb454;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 13px/1.45 ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+input,
+textarea {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* toolbar ------------------------------------------------------------------ */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  flex-shrink: 0;
+}
+.brand {
+  letter-spacing: 0.02em;
+}
+.urlbar {
+  display: flex;
+  gap: 6px;
+}
+.urlbar input {
+  width: 260px;
+}
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+.dot {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+.dot::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4a5160;
+}
+.dot--on::before {
+  background: #52c47a;
+}
+.dot--off::before {
+  background: #d05a5a;
+}
+.muted {
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.banner {
+  padding: 7px 12px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.banner--warn {
+  background: rgba(255, 180, 84, 0.14);
+  color: var(--warn);
+}
+.banner code {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+}
+
+/* stage -------------------------------------------------------------------- */
+
+.stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.frame {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: #0e1013;
+}
+.frame iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+.frame__empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--muted);
+}
+
+/* Android target: a screenshot stands in for the iframe. The wrapper is sized to the
+   device's own pixels so overlay coordinates need no scaling. */
+.frame--device {
+  overflow: auto;
+  display: grid;
+  place-items: start center;
+  padding: 12px;
+}
+.device {
+  position: relative;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px var(--line);
+}
+.device__shot {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.target-badge {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+}
+.box {
+  position: absolute;
+  pointer-events: none;
+}
+.box--hover {
+  outline: 1px dashed var(--accent);
+  background: var(--accent-soft);
+}
+.box--selected {
+  outline: 2px solid var(--accent);
+  background: rgba(76, 141, 255, 0.08);
+}
+.box__label {
+  position: absolute;
+  top: -19px;
+  left: 0;
+  white-space: nowrap;
+  background: var(--accent);
+  color: #06080c;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.box__handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 2px;
+  pointer-events: auto;
+  cursor: nwse-resize;
+}
+
+/* side --------------------------------------------------------------------- */
+
+.side {
+  width: 360px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.panel {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  overflow: auto;
+  max-height: 55%;
+}
+.panel--empty {
+  color: var(--muted);
+}
+.panel__title {
+  margin: 8px 0 10px;
+  font-size: 14px;
+}
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+}
+.crumb {
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+  color: var(--muted);
+}
+.crumb--current {
+  background: var(--accent);
+  color: #06080c;
+  border: 1px solid var(--accent);
+  font-weight: 600;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  gap: 4px 10px;
+  margin: 0;
+}
+.facts dt {
+  color: var(--muted);
+}
+.facts dd {
+  margin: 0;
+}
+.mono {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 11.5px;
+}
+.wrap {
+  word-break: break-all;
+}
+
+.tweak {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 7px 9px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+.children {
+  margin-top: 14px;
+}
+.children__title {
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.children__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.child {
+  font-size: 11px;
+  padding: 2px 7px;
+}
+
+/* chat --------------------------------------------------------------------- */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.chat__log {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat__hint {
+  color: var(--muted);
+}
+.chat__warn {
+  padding: 8px 12px;
+  color: var(--warn);
+  background: rgba(255, 180, 84, 0.1);
+}
+.msg {
+  padding: 7px 9px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.msg--user {
+  background: var(--accent-soft);
+  align-self: flex-end;
+  max-width: 90%;
+}
+.msg--assistant {
+  background: var(--bg-2);
+}
+.msg--system {
+  color: var(--muted);
+  font-size: 12px;
+}
+.msg--pending {
+  opacity: 0.7;
+}
+.chat__input {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+.chat__input textarea {
+  flex: 1;
+  resize: none;
+  height: 58px;
+}
+.badge {
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #06080c;
+  font-size: 11px;
+}

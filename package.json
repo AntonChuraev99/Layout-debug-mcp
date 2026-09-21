@@ -1,0 +1,33 @@
+{
+  "name": "layout-debug-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Select a layout layer on a live UI, move it for real, and hand the result to an AI agent.",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "server": "tsx watch src/server/index.ts",
+    "mcp": "tsx src/mcp/index.ts",
+    "build": "npm run build:inspector && vite build",
+    "build:inspector": "vite build --config vite.inspector.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.220",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "ws": "^8.18.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.1.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.0"
+  }
+}
