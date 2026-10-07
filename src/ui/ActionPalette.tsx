@@ -3,7 +3,10 @@ import type { LayoutNode, NodeId, Override, Snapshot } from '../shared/protocol.
 import {
   IconChat,
   IconCheck,
+  IconChevronDown,
+  IconChevronLeft,
   IconChevronRight,
+  IconChevronUp,
   IconCircleX,
   IconCopy,
   IconEye,
@@ -12,21 +15,31 @@ import {
   IconMove,
   IconResize,
   IconUndo,
+  IconX,
 } from './icons.tsx'
-import { useT } from './i18n.ts'
+import { useT, type MsgKey } from './i18n.ts'
 import { NodeDetails, ancestorsOf } from './NodeDetails.tsx'
+import type { ArrowKey, NudgeKind } from './pick.ts'
 import { bestAnchor, displayLabel } from './thread.ts'
 
 const CRUMBS_SHOWN = 3
+
+/** On-screen arrows of the nudge row, in reading order ← ↑ ↓ →, named per row. */
+const NUDGE_BUTTONS: Array<{ key: ArrowKey; icon: ReactNode; move: MsgKey; resize: MsgKey }> = [
+  { key: 'ArrowLeft', icon: <IconChevronLeft size={14} />, move: 'nudge.left', resize: 'nudge.narrower' },
+  { key: 'ArrowUp', icon: <IconChevronUp size={14} />, move: 'nudge.up', resize: 'nudge.shorter' },
+  { key: 'ArrowDown', icon: <IconChevronDown size={14} />, move: 'nudge.down', resize: 'nudge.taller' },
+  { key: 'ArrowRight', icon: <IconChevronRight size={14} />, move: 'nudge.right', resize: 'nudge.wider' },
+]
 
 interface Props {
   snapshot: Snapshot
   node: LayoutNode
   override: Override | undefined
-  /** Move tool is on: moving and resizing are already live for every node. */
-  toolMoves: boolean
-  moveOn: boolean
-  resizeOn: boolean
+  /** Which nudge row is on (arrows step the layer); dragging in the frame works either way. */
+  nudge: NudgeKind | null
+  /** The nudge row was closed by key while focus was in it: focus goes back to its row. */
+  nudgeExit: { kind: NudgeKind; nonce: number } | null
   /** Null when live tweaks can be sent; otherwise why not (Android without the server). */
   tweakBlocked: string | null
   /** Null when the target has a channel for visibility; otherwise why it does not. */
@@ -39,8 +52,9 @@ interface Props {
   focusRequest: { row: 'first' | 'chat'; nonce: number } | null
   onSelect: (id: NodeId) => void
   onOpenChat: () => void
-  onToggleMove: () => void
-  onToggleResize: () => void
+  onDeselect: () => void
+  onToggleNudge: (kind: NudgeKind) => void
+  onNudge: (key: ArrowKey, shift: boolean) => void
   onToggleHidden: () => void
   onClearOverride: () => void
   onStopWaiting: () => void
@@ -58,7 +72,21 @@ export function ActionPalette(props: Props) {
   const copyTimer = useRef<number | undefined>(undefined)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const chatRowRef = useRef<HTMLButtonElement | null>(null)
+  const moveRowRef = useRef<HTMLButtonElement | null>(null)
+  const resizeRowRef = useRef<HTMLButtonElement | null>(null)
+  const nudgeRef = useRef<HTMLDivElement | null>(null)
   const anchor = bestAnchor(node.anchors)
+  const unit = snapshot.unit === 'dp' ? 'dp' : 'px'
+
+  // A row turned on: focus goes to its first arrow, so the keyboard path starts right there.
+  useEffect(() => {
+    if (props.nudge) nudgeRef.current?.querySelector<HTMLElement>('button')?.focus()
+  }, [props.nudge])
+
+  useEffect(() => {
+    if (!props.nudgeExit) return
+    ;(props.nudgeExit.kind === 'move' ? moveRowRef : resizeRowRef).current?.focus()
+  }, [props.nudgeExit])
 
   // A new node starts clean: no "copied", short breadcrumb.
   useEffect(() => {
@@ -86,6 +114,8 @@ export function ActionPalette(props: Props) {
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // With a nudge row on, arrows step the layer (the window's key handler), not the focus.
+    if (props.nudge) return
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
     const items = [...(rootRef.current?.querySelectorAll<HTMLElement>('.palette__rows [role^="menuitem"]') ?? [])]
     if (!items.length) return
@@ -99,7 +129,25 @@ export function ActionPalette(props: Props) {
   const hidden = Boolean(ov?.hidden)
   const crumbs = allCrumbs || chain.length <= CRUMBS_SHOWN ? chain : chain.slice(-CRUMBS_SHOWN)
   const withClass = allCrumbs || crumbs.reduce((n, a) => n + crumbName(a, true).length, 0) <= CRUMB_CHARS
-  const moveReason = props.toolMoves ? t('palette.moveByTool') : props.tweakBlocked
+  const moveReason = props.tweakBlocked
+
+  const nudgeRow = (kind: NudgeKind) =>
+    props.nudge === kind && (
+      <div ref={nudgeRef} className="nudge" role="group" aria-label={t('nudge.group')} title={t('nudge.title', { unit })}>
+        {NUDGE_BUTTONS.map((b) => (
+          <button
+            key={b.key}
+            type="button"
+            className="icon-btn nudge__btn"
+            aria-label={t(kind === 'move' ? b.move : b.resize, { unit })}
+            onClick={(e) => props.onNudge(b.key, e.shiftKey)}
+          >
+            {b.icon}
+          </button>
+        ))}
+        <span className="nudge__shift">{t('nudge.shift')}</span>
+      </div>
+    )
 
   return (
     <div
@@ -109,6 +157,15 @@ export function ActionPalette(props: Props) {
       aria-label={t('palette.label', { name: `${node.kind} ${node.label}` })}
       onKeyDown={onKeyDown}
     >
+      <button
+        type="button"
+        className="icon-btn palette__close"
+        aria-label={t('palette.deselect')}
+        title={t('palette.deselect')}
+        onClick={props.onDeselect}
+      >
+        <IconX size={14} />
+      </button>
       <div className="palette__body" key={node.id}>
         {chain.length > 0 && (
           <nav className={`crumbs${allCrumbs ? ' crumbs--all' : ''}`} aria-label={t('palette.parents')}>
@@ -159,23 +216,27 @@ export function ActionPalette(props: Props) {
           </div>
           <div className="pgroup">
             <Row
+              ref={moveRowRef}
               icon={<IconMove />}
-              checked={props.toolMoves || props.moveOn}
+              checked={props.nudge === 'move'}
               disabled={moveReason !== null}
               title={moveReason ?? t('palette.moveHint')}
-              onClick={props.onToggleMove}
+              onClick={() => props.onToggleNudge('move')}
             >
               {t('palette.move')}
             </Row>
+            {nudgeRow('move')}
             <Row
+              ref={resizeRowRef}
               icon={<IconResize />}
-              checked={props.toolMoves || props.resizeOn}
+              checked={props.nudge === 'resize'}
               disabled={moveReason !== null}
               title={moveReason ?? t('palette.resizeHint')}
-              onClick={props.onToggleResize}
+              onClick={() => props.onToggleNudge('resize')}
             >
               {t('palette.resize')}
             </Row>
+            {nudgeRow('resize')}
             <Row
               icon={hidden ? <IconEye /> : <IconEyeOff />}
               disabled={props.hideBlocked !== null}

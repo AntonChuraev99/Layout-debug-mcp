@@ -1,4 +1,5 @@
 import {
+  altClick,
   centerOf,
   chatDialog,
   clearQueue,
@@ -9,6 +10,7 @@ import {
   hoverBox,
   openWindow,
   palette,
+  pipetteButton,
   selectedBox,
   selectInFrame,
   serveDir,
@@ -27,13 +29,18 @@ test.beforeEach(async () => {
   await clearQueue()
 })
 
-test('2 hover highlights the element under the cursor, click selects it, breadcrumbs go up', async ({ page }) => {
+test('2 with Alt, hover highlights the element under the cursor, Alt+click selects it, breadcrumbs go up', async ({ page }) => {
   await openWindow(page)
   const frame = frameOf(page)
   const cta = frame.getByTestId('cta-continue')
   const c = await centerOf(cta)
 
+  // Without Alt the page is live: hovering highlights nothing.
   await page.mouse.move(c.x, c.y)
+  await expect(hoverBox(page)).toHaveCount(0)
+
+  await page.keyboard.down('Alt')
+  await page.mouse.move(c.x + 1, c.y)
   await expect(hoverBox(page)).toBeVisible()
   expectSameBox(await hoverBox(page).boundingBox(), c.box)
   await expect(hoverBox(page)).toContainText('button')
@@ -45,6 +52,7 @@ test('2 hover highlights the element under the cursor, click selects it, breadcr
   await expect(hoverBox(page)).toContainText('h1')
 
   await page.mouse.click(c.x, c.y)
+  await page.keyboard.up('Alt')
   await expect(palette(page)).toHaveAccessibleName(/^Actions: button/)
   expectSameBox(await selectedBox(page).boundingBox(), c.box)
 
@@ -60,43 +68,230 @@ test('2 hover highlights the element under the cursor, click selects it, breadcr
   expectSameBox(await selectedBox(page).boundingBox(), (await centerOf(frame.getByTestId('subscription-card'))).box)
 })
 
-test('3 tools V / M / H by click and by key; Hand lets clicks through to the page', async ({ page }) => {
+test('3 a plain click reaches the page; Alt+click selects and the page never sees it; the selected body holds the mouse', async ({ page }) => {
   await openWindow(page, { target: `${site.url}/counter.html`, probe: (n) => n.anchors.testId === 'counter' })
-  const tool = (name: string) => page.getByRole('button', { name })
-  const pressed = async (name: string) => {
-    for (const n of ['Select (V)', 'Move (M)', 'Hand (H)']) {
-      await expect(tool(n)).toHaveAttribute('aria-pressed', String(n === name))
-    }
-  }
-  await pressed('Select (V)')
-
-  await tool('Move (M)').click()
-  await pressed('Move (M)')
-  await tool('Hand (H)').click()
-  await pressed('Hand (H)')
-  await tool('Select (V)').click()
-  await pressed('Select (V)')
-
-  await page.keyboard.press('m')
-  await pressed('Move (M)')
-  await page.keyboard.press('h')
-  await pressed('Hand (H)')
-  await page.keyboard.press('v')
-  await pressed('Select (V)')
-
-  // Select: the overlay takes the click, the page never sees it.
   const counter = frameOf(page).getByTestId('counter')
-  await selectInFrame(page, counter)
-  await expect(counter).toHaveText('Click me')
-
-  // Hand: no selection chrome, and the click reaches the page itself.
-  await page.keyboard.press('h')
-  await pressed('Hand (H)')
-  await expect(palette(page)).toHaveCount(0)
-  await expect(selectedBox(page)).toHaveCount(0)
   const { x, y } = await centerOf(counter)
+
+  // Nothing selected: the page is live, the click is the page's.
   await page.mouse.click(x, y)
   await expect(counter).toHaveText('Clicked 1')
+
+  // Alt+click: the overlay takes it, the page never sees it.
+  await selectInFrame(page, counter)
+  await expect(counter).toHaveText('Clicked 1')
+  // The new label widened the button; the box follows once the page is recaptured.
+  await expect(async () => expectSameBox(await selectedBox(page).boundingBox(), (await centerOf(counter)).box)).toPass({ timeout: 3_000 })
+
+  // A plain click on the selected body is a grab (drag), not a click for the page.
+  await page.mouse.click(x, y)
+  await expect(counter).toHaveText('Clicked 1')
+  await expect(palette(page)).toBeVisible()
+
+  // Escape lets the element go, and the page gets its clicks back.
+  await page.keyboard.press('Escape')
+  await expect(selectedBox(page)).toHaveCount(0)
+  await page.mouse.click(x, y)
+  await expect(counter).toHaveText('Clicked 2')
+})
+
+test('3b with a layer selected, a plain click elsewhere goes to the page and keeps the selection', async ({ page }) => {
+  await openWindow(page)
+  const frame = frameOf(page)
+  // The second card's title: its palette opens to the right, clear of the CTA.
+  await selectInFrame(page, frame.getByRole('heading', { name: 'Вторая карточка' }))
+  const before = await selectedBox(page).boundingBox()
+
+  const cta = frame.getByTestId('cta-continue')
+  const c = await centerOf(cta)
+  await page.mouse.click(c.x, c.y)
+  // The page got the click (the button took focus), the window did not deselect.
+  await expect(cta).toBeFocused()
+  await expect(palette(page)).toHaveAccessibleName(/^Actions: h2/)
+  expectSameBox(await selectedBox(page).boundingBox(), before!)
+  await expect(page.locator('.overlay .handle')).toHaveCount(4)
+})
+
+test('3c a repeated Alt+click on the same spot climbs to the parent; the root says so instead of doing nothing', async ({ page }) => {
+  await openWindow(page)
+  const c = await centerOf(frameOf(page).getByTestId('cta-continue'))
+  await altClick(page, c.x, c.y)
+  await expect(palette(page)).toHaveAccessibleName(/^Actions: button/)
+  await altClick(page, c.x + 2, c.y)
+  await expect(palette(page)).toHaveAccessibleName('Actions: div div.actions')
+  await altClick(page, c.x + 2, c.y + 2)
+  await expect(palette(page)).toHaveAccessibleName('Actions: section section.card')
+
+  // Far enough from the last pick: the tightest layer again, not one more parent.
+  await altClick(page, c.x + 30, c.y)
+  await expect(palette(page)).toHaveAccessibleName(/^Actions: button/)
+
+  // Up to the root, then once more: the label reports the top.
+  for (let i = 0; i < 10 && !(await page.locator('.chip--selected').textContent())?.includes('Top layer'); i++) {
+    await altClick(page, c.x + 30, c.y)
+  }
+  await expect(page.locator('.chip--selected')).toContainText('Top layer')
+})
+
+test('3d Alt+wheel raises the hover to the parent, and Alt+click picks what it shows', async ({ page }) => {
+  await openWindow(page)
+  const c = await centerOf(frameOf(page).getByTestId('cta-continue'))
+  await page.keyboard.down('Alt')
+  await page.mouse.move(c.x, c.y)
+  await expect(hoverBox(page)).toContainText('button')
+  await page.mouse.wheel(0, -100)
+  await expect(hoverBox(page)).toContainText('div')
+  await expect(hoverBox(page).locator('.chip__lvl')).toBeVisible()
+  await page.mouse.wheel(0, 100)
+  await expect(hoverBox(page)).toContainText('button')
+  await page.mouse.wheel(0, -100)
+  await page.mouse.down()
+  await page.mouse.up()
+  await page.keyboard.up('Alt')
+  await expect(palette(page)).toHaveAccessibleName('Actions: div div.actions')
+})
+
+test('3d2 Alt pressed with the cursor resting on the page highlights at once, without a move', async ({ page }) => {
+  await openWindow(page)
+  const c = await centerOf(frameOf(page).getByTestId('cta-continue'))
+  // The cursor rests over the live page (the page, not the window, saw this move).
+  await page.mouse.move(c.x, c.y)
+  await expect(hoverBox(page)).toHaveCount(0)
+  await page.keyboard.down('Alt')
+  await expect(hoverBox(page)).toBeVisible()
+  await expect(hoverBox(page)).toContainText('button')
+  expectSameBox(await hoverBox(page).boundingBox(), c.box)
+  await page.keyboard.up('Alt')
+  await expect(hoverBox(page)).toHaveCount(0)
+})
+
+test('3d3 Alt over a selected layer leaves it an outline only; past the root the hover says Top layer', async ({ page }) => {
+  await openWindow(page)
+  const frame = frameOf(page)
+  await selectInFrame(page, frame.getByRole('heading', { name: 'Вторая карточка' }))
+  await expect(page.locator('.chip--selected')).toBeVisible()
+
+  // Alt over the selection itself: one label (the hover's), the selection keeps only its outline.
+  const h = await centerOf(frame.getByRole('heading', { name: 'Вторая карточка' }))
+  await page.keyboard.down('Alt')
+  await page.mouse.move(h.x, h.y)
+  await expect(page.locator('.chip--selected')).toHaveCount(0)
+  await expect(page.locator('.overlay .handle')).toHaveCount(0)
+  await expect(hoverBox(page)).toContainText('h2')
+  await expect(page.locator('.overlay .chip')).toHaveCount(1)
+
+  // Another branch: the wheel walks the hover up to the root and once more.
+  const c = await centerOf(frame.getByTestId('cta-continue'))
+  await page.mouse.move(c.x, c.y)
+  for (let i = 0; i < 8; i++) await page.mouse.wheel(0, -100)
+  await expect(hoverBox(page)).toContainText('Top layer')
+  await page.keyboard.up('Alt')
+})
+
+test('3d4 a scrolling ticker elsewhere on the page does not hide the palette', async ({ page }) => {
+  await openWindow(page, { target: `${site.url}/link.html`, probe: (n) => n.anchors.testId === 'dl' })
+  await selectInFrame(page, frameOf(page).getByTestId('dl'))
+  // Any moment of hiding counts, not just the state at the end.
+  await page.evaluate(() => {
+    const w = window as unknown as { staleSeen: boolean }
+    w.staleSeen = false
+    new MutationObserver(() => {
+      if (document.querySelector('.float--stale, .overlay--stale')) w.staleSeen = true
+    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] })
+  })
+  const ticker = frameOf(page).getByTestId('ticker')
+  await ticker.evaluate(
+    (el) =>
+      new Promise<void>((done) => {
+        let n = 0
+        const t = setInterval(() => {
+          el.scrollLeft += 4
+          if (++n === 30) {
+            clearInterval(t)
+            done()
+          }
+        }, 30)
+      }),
+  )
+  expect(await page.evaluate(() => (window as unknown as { staleSeen: boolean }).staleSeen), 'palette hid during an unrelated scroll').toBe(false)
+  await expect(palette(page)).toBeVisible()
+
+  // A scroll of the document itself does move the selection: then the boxes step aside.
+  await frameOf(page).locator('body').evaluate((b) => {
+    b.style.height = '3000px'
+  })
+  await frameOf(page).locator('html').evaluate(() => window.scrollBy(0, 40))
+  await expect.poll(() => page.evaluate(() => (window as unknown as { staleSeen: boolean }).staleSeen)).toBe(true)
+})
+
+test('3e the pipette selects one layer and switches itself off; Escape cancels it', async ({ page }) => {
+  await openWindow(page)
+  const counterPage = frameOf(page)
+  const pipette = pipetteButton(page)
+  await pipette.click()
+  await expect(pipette).toHaveAttribute('aria-pressed', 'true')
+  await page.keyboard.press('Escape')
+  await expect(pipette).toHaveAttribute('aria-pressed', 'false')
+
+  await pipette.click()
+  const c = await centerOf(counterPage.getByTestId('cta-continue'))
+  await page.mouse.click(c.x, c.y)
+  await expect(palette(page)).toHaveAccessibleName(/^Actions: button/)
+  await expect(pipette).toHaveAttribute('aria-pressed', 'false')
+  // Back to the live page: the next plain click is the page's (no hover, no new pick).
+  const title = await centerOf(counterPage.getByRole('heading', { name: 'Годовая подписка' }))
+  await page.mouse.move(title.x, title.y)
+  await expect(hoverBox(page)).toHaveCount(0)
+})
+
+test('3f Alt+click on a link inside the focused page selects it and downloads nothing', async ({ page }) => {
+  await openWindow(page, { target: `${site.url}/link.html`, probe: (n) => n.anchors.testId === 'dl' })
+  const downloads: string[] = []
+  page.on('download', (d) => downloads.push(d.suggestedFilename()))
+  const frame = frameOf(page)
+  // Focus inside the page: the window hears about Alt only through the inspector.
+  await frame.getByTestId('field').click()
+  const link = frame.getByTestId('dl')
+  await selectInFrame(page, link)
+  await expect(palette(page)).toHaveAccessibleName(/^Actions: a/)
+
+  // The inspector's own guard: an Alt+click that reaches the page is swallowed.
+  await link.dispatchEvent('click', { altKey: true, bubbles: true, cancelable: true })
+  await page.waitForTimeout(1_000)
+  expect(downloads, 'Alt+click must never download the link').toEqual([])
+})
+
+test('3g AltGr (Ctrl+Alt) while typing in the page does not turn selection on', async ({ page }) => {
+  await openWindow(page, { target: `${site.url}/link.html`, probe: (n) => n.anchors.testId === 'dl' })
+  const field = frameOf(page).getByTestId('field')
+  await field.click()
+  await page.keyboard.down('Control')
+  await page.keyboard.down('Alt')
+  const c = await centerOf(frameOf(page).getByTestId('dl'))
+  await page.mouse.move(c.x, c.y)
+  await expect(page.locator('.canvas--picking')).toHaveCount(0)
+  await expect(hoverBox(page)).toHaveCount(0)
+  await page.keyboard.up('Alt')
+  await page.keyboard.up('Control')
+  await page.keyboard.type('ok')
+  await expect(field).toHaveValue('ok')
+})
+
+test('3h Alt that never got its keyup (Alt+Tab) is dropped when the window loses focus', async ({ page }) => {
+  await openWindow(page)
+  await page.keyboard.down('Alt')
+  await expect(page.locator('.canvas--picking')).toHaveCount(1)
+  // Alt+Tab: the window blurs and the keyup goes to another app.
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hasFocus', { value: () => false, configurable: true })
+    window.dispatchEvent(new Event('blur'))
+  })
+  await expect(page.locator('.canvas--picking')).toHaveCount(0)
+  await expect(page.locator('.pick.is-alt')).toHaveCount(0)
+  await page.evaluate(() => {
+    delete (document as unknown as { hasFocus?: unknown }).hasFocus
+  })
+  await page.keyboard.up('Alt')
 })
 
 test('8 details expand with the element facts and collapse again', async ({ page }) => {

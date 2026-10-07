@@ -9,29 +9,48 @@ import {
 } from '../shared/protocol.ts'
 import { isKeyMessage } from '../inspector/keys.ts'
 
+/** Boxes reappear only this long after the page's last scroll (with the fresh snapshot). */
+const SCROLL_SETTLE_MS = 90
+/** A scroll whose snapshot never comes (a page that throws in capture) must not hide the selection forever. */
+const SCROLL_FALLBACK_MS = 700
+
+export interface TargetEvents {
+  /** The selection modifier, as the page saw it while it had focus. */
+  onAlt?: (down: boolean, blur: boolean) => void
+  /** An Alt+click the page swallowed: select at this point of the frame. */
+  onAltPick?: (x: number, y: number) => void
+  /** Where the cursor rests over the page (answer to `queryPointer`). */
+  onPointer?: (x: number, y: number) => void
+}
+
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
 /**
  * Bridge to the inspector running inside the target page. Cross-origin by
  * design: we never touch the iframe's DOM, we only exchange messages with it.
  */
-export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>) {
+export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>, events?: React.RefObject<TargetEvents>) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [overrides, setOverrides] = useState<Record<NodeId, Override>>({})
+  const [scrolling, setScrolling] = useState(false)
   const overridesRef = useRef(overrides)
   overridesRef.current = overrides
   /** Guards the one-time reset of tweaks left in the page by a previous UI session. */
   const syncedRef = useRef(false)
+  const scroll = useRef<{ at: number; timer: number | undefined }>({ at: 0, timer: undefined })
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (isKeyMessage(event.data)) {
-        // A tool shortcut pressed while focus sits in the page (after a Hand-tool click).
-        // Replayed as a keydown on the window, so the one shortcut handler in App applies
-        // all its guards (blocked tools, open chat) exactly as for a key typed here.
+        // A window key pressed while focus sits in the live page. Replayed as a keydown on
+        // the window, so the one key handler in App applies all its guards (open chat,
+        // Escape order, nudge on or off) exactly as for a key typed here.
         if (event.source === iframeRef.current?.contentWindow) {
-          const key = event.data.key
-          window.dispatchEvent(new KeyboardEvent('keydown', { key, code: `Key${key.toUpperCase()}`, cancelable: true }))
+          const { key, shift } = event.data
+          const code = key.length === 1 ? `Key${key.toUpperCase()}` : key
+          window.dispatchEvent(new KeyboardEvent('keydown', { key, code, shiftKey: Boolean(shift), cancelable: true }))
         }
         return
       }
@@ -44,9 +63,30 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>) 
           setConnected(true)
           setError(null)
           break
+        case 'alt':
+          if (typeof data.down === 'boolean') events?.current?.onAlt?.(data.down, data.blur === true)
+          break
+        case 'altPick':
+          if (isNum(data.x) && isNum(data.y)) events?.current?.onAltPick?.(data.x, data.y)
+          break
+        case 'pointer':
+          if (isNum(data.x) && isNum(data.y)) events?.current?.onPointer?.(data.x, data.y)
+          break
+        case 'scrolling': {
+          const s = scroll.current
+          s.at = Date.now()
+          window.clearTimeout(s.timer)
+          s.timer = window.setTimeout(() => setScrolling(false), SCROLL_FALLBACK_MS)
+          setScrolling(true)
+          break
+        }
         case 'snapshot':
           setConnected(true)
           setSnapshot(data.snapshot)
+          if (Date.now() - scroll.current.at >= SCROLL_SETTLE_MS) {
+            window.clearTimeout(scroll.current.timer)
+            setScrolling(false)
+          }
           // The UI can reload (HMR, refresh) while the page keeps the inline
           // styles from a previous session. Those tweaks are unmanageable once
           // we've lost their ids, so the first snapshot resets the page.
@@ -64,8 +104,11 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>) 
       }
     }
     window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [iframeRef])
+    return () => {
+      window.removeEventListener('message', onMessage)
+      window.clearTimeout(scroll.current.timer)
+    }
+  }, [iframeRef, events])
 
   const send = useCallback(
     (msg: UiToInspector) => {
@@ -101,11 +144,30 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>) 
     send({ tag: PROTOCOL_TAG, from: 'ui', t: 'clearAllOverrides' })
   }, [send])
 
+  /** The overlay caught a wheel over the selected layer: scroll the page under that point. */
+  const forwardWheel = useCallback(
+    (x: number, y: number, dx: number, dy: number) => send({ tag: PROTOCOL_TAG, from: 'ui', t: 'wheel', x, y, dx, dy }),
+    [send],
+  )
+
+  /** Arrows typed in the page go to the window while the palette's nudge row is on. */
+  const setNudge = useCallback((on: boolean) => send({ tag: PROTOCOL_TAG, from: 'ui', t: 'nudge', on }), [send])
+
+  /** Only scrolls that move this layer hide the window's boxes. */
+  const setSelected = useCallback((nodeId: NodeId | null) => send({ tag: PROTOCOL_TAG, from: 'ui', t: 'selected', nodeId }), [send])
+
+  /** Alt went down in the window: the page answers with the resting cursor, if it is over it. */
+  const queryPointer = useCallback(() => send({ tag: PROTOCOL_TAG, from: 'ui', t: 'pointerQuery' }), [send])
+
+  /** A pick during the current Alt press: the page's keyup handler keeps it from the browser menu. */
+  const notifyPicked = useCallback(() => send({ tag: PROTOCOL_TAG, from: 'ui', t: 'picked' }), [send])
+
   /** The iframe reloaded — the inspector will say hello again on its own. */
   const onFrameLoad = useCallback(() => {
     setConnected(false)
     setSnapshot(null)
     setOverrides({})
+    setScrolling(false)
     syncedRef.current = true // a fresh page carries no stale inline styles
   }, [])
 
@@ -113,6 +175,12 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>) 
     snapshot,
     connected,
     error,
+    scrolling,
+    forwardWheel,
+    setNudge,
+    setSelected,
+    queryPointer,
+    notifyPicked,
     overrides,
     overridesRef,
     capture,

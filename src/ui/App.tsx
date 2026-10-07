@@ -10,7 +10,9 @@ import { useT, type MsgKey } from './i18n.ts'
 import { IconGlobe, IconPlug, IconRefresh, IconSmartphone, IconX } from './icons.tsx'
 import { Inbox, type InboxItem, type LooseEntry } from './Inbox.tsx'
 import { describeOverride } from './NodeDetails.tsx'
-import { Overlay, type Mark, type Tool } from './Overlay.tsx'
+import { effectiveRect, Overlay, type Mark, type OverlayApi, type PickSource } from './Overlay.tsx'
+import { COMPACT_AFTER_PICKS, escapeStep, isArrowKey, isOffscreen, nudgeOverride, type NudgeKind } from './pick.ts'
+import { useAltKey } from './useAltKey.ts'
 import {
   decideRefresh,
   overridesHandedOver,
@@ -52,6 +54,43 @@ const HMR_GRACE_MS = 1500
 /** A refresh that brings no fresh snapshot within this is reported; the blur goes anyway. */
 const REFRESH_TIMEOUT_MS = 5000
 const DISMISSED_KEY = 'layout-debug.dismissed'
+/** Successful Alt picks so far; past COMPACT_AFTER_PICKS the header hint folds to its key cap. */
+const ALT_PICKS_KEY = 'layout-debug.altPicks'
+/** The first-run hint was seen once in this browser. */
+const COACH_SEEN_KEY = 'layout-debug.coachSeen'
+
+function readNumber(key: string): number {
+  try {
+    const n = Number(localStorage.getItem(key))
+    return Number.isFinite(n) ? n : 0
+  } catch {
+    return 0
+  }
+}
+
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === '1'
+  } catch {
+    // Blocked storage: no hint rather than the hint on every load.
+    return true
+  }
+}
+
+function writeStorage(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // Private window: the convenience holds for this session only.
+  }
+}
+
+/** macOS calls the key Option; the copy and the key cap follow. */
+const IS_MAC = (() => {
+  if (typeof navigator === 'undefined') return false
+  const platform = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? ''
+  return /mac/i.test(platform)
+})()
 const FLOAT_MARGIN = 12
 /** DESIGN_SPEC Motion: the palette/chat card fades out this long (styles.css `float-out`). */
 const FLOAT_HIDE_MS = 100
@@ -110,8 +149,21 @@ export function App() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const canvasRef = useRef<HTMLElement | null>(null)
   const floatRef = useRef<HTMLDivElement | null>(null)
-  const web = useTarget(iframeRef)
-  const { t, rich, locale } = useT()
+  const overlayApi = useRef<OverlayApi | null>(null)
+  const alt = useAltKey()
+  const targetEvents = useRef({
+    onAlt: alt.report,
+    onAltPick: (x: number, y: number) => {
+      alt.markPicked()
+      overlayApi.current?.pickAt(x, y, 'alt')
+    },
+    onPointer: (x: number, y: number) => overlayApi.current?.hoverAt(x, y),
+  })
+  const web = useTarget(iframeRef, targetEvents)
+  const { t: translateKey, rich, locale } = useT()
+  const altName = IS_MAC ? 'Option' : 'Alt'
+  // Every text that names the modifier says Option on macOS.
+  const t: typeof translateKey = (key, params) => translateKey(key, { alt: altName, ...params })
   const { state, send, submit, clearError } = useServer(locale)
   const isAndroid = state.target === 'android'
 
@@ -123,10 +175,13 @@ export function App() {
   const [bannerHidden, setBannerHidden] = useState(false)
 
   const [selectedId, setSelectedId] = useState<NodeId | null>(null)
-  const [tool, setTool] = useState<Tool>('select')
-  const [moveOn, setMoveOn] = useState(false)
-  const [resizeOn, setResizeOn] = useState(false)
+  const [pipette, setPipette] = useState(false)
+  /** The palette's arrow-key row: Move or Resize, at most one. */
+  const [nudge, setNudge] = useState<NudgeKind | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  /** Read once: a hint that folds in the middle of a session would move the address bar under the cursor. */
+  const [learned] = useState(() => readNumber(ALT_PICKS_KEY) >= COMPACT_AFTER_PICKS)
+  const [coachSeen, setCoachSeen] = useState(() => readFlag(COACH_SEEN_KEY))
   const [chat, setChat] = useState<ChatTarget>(null)
   const [dragging, setDragging] = useState(false)
   const [focusRequest, setFocusRequest] = useState<{ row: 'first' | 'chat'; nonce: number } | null>(null)
@@ -282,8 +337,7 @@ export function App() {
   const selectNode = useCallback((id: NodeId | null) => {
     if (id === selectedRef.current) return
     setSelectedId(id)
-    setMoveOn(false)
-    setResizeOn(false)
+    setNudge(null)
     setChat((c) => (c?.kind === 'node' ? null : c))
   }, [])
 
@@ -309,8 +363,7 @@ export function App() {
       const thread = state.requests.filter((r) => sameElement(r.node, prev))
       const last = thread[thread.length - 1]
       setSelectedId(null)
-      setMoveOn(false)
-      setResizeOn(false)
+      setNudge(null)
       setChat((c) => (c?.kind === 'node' ? (last ? { kind: 'missing', request: last } : null) : c))
       return
     }
@@ -622,15 +675,69 @@ export function App() {
   const tweakBlocked = isAndroid && !state.online ? t('blocked.offlineMove') : null
   const hideBlocked = isAndroid ? t('blocked.hideAndroid') : null
 
-  const canMove = useCallback(
-    (id: NodeId) => {
-      if (tweakBlocked) return false
-      if (tool === 'move') return true
-      return tool === 'select' && moveOn && id === selectedId
+  // --- picking: Alt held or the pipette on (web); Android selects by a plain click too ---
+  const toolsBlocked = !snapshot ? (isAndroid ? t('blocked.needDevice') : t('blocked.needPage')) : null
+  const pipetteOn = pipette && !isAndroid && Boolean(snapshot)
+  const picking = Boolean(snapshot) && (alt.down || pipetteOn)
+
+  // The pipette is for one pick of this page; another page or target turns it off.
+  useEffect(() => {
+    if (!snapshot || isAndroid) setPipette(false)
+  }, [snapshot, isAndroid])
+
+  // The inspector hides boxes only for scrolls that move the selected element (DESIGN_SPEC §9),
+  // so it needs to know which one that is.
+  useEffect(() => {
+    if (!isAndroid) web.setSelected(selectedId)
+  }, [selectedId, isAndroid, web.setSelected, web.snapshot])
+
+  // Arrows typed while focus sits in the page reach the window only while a nudge row is on.
+  useEffect(() => {
+    if (!isAndroid) web.setNudge(nudge !== null)
+  }, [nudge, isAndroid, web.setNudge, web.connected])
+
+  const coachOpen = !isAndroid && web.connected && !coachSeen
+  const closeCoach = useCallback(() => {
+    setCoachSeen(true)
+    writeStorage(COACH_SEEN_KEY, '1')
+  }, [])
+
+  /**
+   * A pick gesture finished. `empty`: it landed on no layer (the selection went, nothing new
+   * was picked) — the Alt release is still not a bare tap, but the pipette stays on for a
+   * real pick, and nothing counts as learned.
+   */
+  const onPicked = useCallback(
+    (source: PickSource, empty = false) => {
+      if (source !== 'click') {
+        // Both sides must know: the Alt keyup goes to whichever document has focus.
+        alt.markPicked()
+        if (!isAndroid) web.notifyPicked()
+      }
+      if (empty) return
+      if (source === 'pipette') setPipette(false)
+      // The hint folds only on web; Android shows no cap to fold to (DESIGN_SPEC §8).
+      if (source === 'alt' && !isAndroid) writeStorage(ALT_PICKS_KEY, String(readNumber(ALT_PICKS_KEY) + 1))
+      if (!coachSeen) closeCoach()
     },
-    [tweakBlocked, tool, moveOn, selectedId],
+    [alt.markPicked, isAndroid, web.notifyPicked, coachSeen, closeCoach],
   )
-  const resizable = Boolean(selected) && !tweakBlocked && (tool === 'move' || resizeOn)
+
+  // Alt pressed with the cursor resting on the page: highlight at once, not on the next move.
+  // The window sees no pointer over the iframe, so the inspector says where it is.
+  useEffect(() => {
+    if (alt.down && !isAndroid) web.queryPointer()
+  }, [alt.down, isAndroid, web.queryPointer])
+
+  /** One arrow step of the nudge row (DESIGN_SPEC §5). */
+  const nudgeBy = useCallback(
+    (key: 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown', shift: boolean) => {
+      if (!nudge || !selected || !snapshot || tweakBlocked) return
+      const rect = effectiveRect(selected, overrides[selected.id])
+      setOverride(nudgeOverride(nudge, key, shift, selected.id, overrides[selected.id], rect, snapshot.pxPerUnit))
+    },
+    [nudge, selected, snapshot, tweakBlocked, overrides, setOverride],
+  )
 
   // --- canvas geometry ---
   const [canvasBox, setCanvasBox] = useState({ w: 0, h: 0 })
@@ -658,7 +765,14 @@ export function App() {
   }, [isAndroid, snapshot, canvasBox])
 
   // --- floating card placement (palette or chat) ---
-  const showFloat = (chat?.kind === 'missing' || (Boolean(selected) && tool !== 'hand')) && !dragging
+  // A layer scrolled out of the frame keeps its selection, but the palette has nothing to point at.
+  const selectedOffscreen = Boolean(
+    selected && snapshot && isOffscreen(effectiveRect(selected, overrides[selected.id]), snapshot.viewport),
+  )
+  const showFloat = (chat?.kind === 'missing' || (Boolean(selected) && !selectedOffscreen)) && !dragging
+  const stale = !isAndroid && web.scrolling
+  // An open chat stays put while the page scrolls: the user may be typing in it.
+  const floatStale = stale && !chat
   const [floatPos, setFloatPos] = useState<{ x: number; y: number; side: Side } | null>(null)
   const [floatSize, setFloatSize] = useState({ w: 0, h: 0 })
 
@@ -768,7 +882,6 @@ export function App() {
 
   const openFromInbox = (r: EditRequest) => {
     setPopover(null)
-    if (tool === 'hand') setTool('select')
     const node = nodeOfRequest.get(r.id)
     if (node) {
       selectNode(node.id)
@@ -781,31 +894,60 @@ export function App() {
   const selectByKeyboard = selectNode
 
   // --- keyboard ---
-  const toolsBlocked = !snapshot ? (isAndroid ? t('blocked.needDevice') : t('blocked.needPage')) : null
+  /** Moves focus back to the palette row whose nudge row just closed by key. */
+  const [nudgeExit, setNudgeExit] = useState<{ kind: NudgeKind; nonce: number } | null>(null)
+  const closeNudge = () => {
+    if (!nudge) return
+    const inside = document.activeElement?.closest('.nudge')
+    setNudge(null)
+    if (inside) setNudgeExit({ kind: nudge, nonce: Date.now() })
+  }
 
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      const t = e.target as HTMLElement | null
-      const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+      const el = e.target instanceof HTMLElement ? e.target : null
+      const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
       if (e.key === 'Escape') {
-        if (chat) return closeChatToPalette()
-        if (detailsOpen) return setDetailsOpen(false)
-        if (selectedId) return selectNode(null)
-        return
+        switch (escapeStep({ coach: coachOpen, chat: Boolean(chat), details: detailsOpen, nudge: nudge !== null, pipette: pipetteOn, selected: Boolean(selectedId) })) {
+          case 'coach':
+            return closeCoach()
+          case 'chat':
+            return closeChatToPalette()
+          case 'details':
+            return setDetailsOpen(false)
+          case 'nudge':
+            return closeNudge()
+          case 'pipette':
+            return setPipette(false)
+          case 'selection':
+            return selectNode(null)
+          default:
+            return
+        }
       }
       if (typing || e.ctrlKey || e.metaKey || e.altKey) return
-      const k = e.key.toLowerCase()
-      const run = (fn: () => void) => {
-        // The key must not also land as a character in a field that opens because of it.
-        e.preventDefault()
-        fn()
+      // The nudge row: arrows step the selected layer, Enter leaves the row.
+      // Not from the header: its buttons and switches keep their own arrow keys.
+      if (nudge && selected && !e.defaultPrevented && !el?.closest('.tb')) {
+        if (isArrowKey(e.key)) {
+          e.preventDefault()
+          nudgeBy(e.key, e.shiftKey)
+          return
+        }
+        const onOtherControl = el && el.closest('button, a, [role="menuitem"], [role="menuitemcheckbox"]') && !el.closest('.nudge')
+        if (e.key === 'Enter' && !onOtherControl) {
+          e.preventDefault()
+          closeNudge()
+          return
+        }
       }
-      // The physical key as well, so the shortcuts work with a non-Latin layout switched on.
-      const is = (letter: string) => k === letter || e.code === `Key${letter.toUpperCase()}`
-      if (is('v') && !toolsBlocked) run(() => setTool('select'))
-      else if (is('m') && !toolsBlocked && !tweakBlocked) run(() => setTool('move'))
-      else if (is('h') && !toolsBlocked) run(() => setTool('hand'))
-      else if (is('c') && selected && tool !== 'hand') run(openChat)
+      const k = e.key.toLowerCase()
+      // The physical key as well, so the shortcut works with a non-Latin layout switched on.
+      if ((k === 'c' || e.code === 'KeyC') && selected && !e.repeat) {
+        // The key must not also land as a character in the chat field it opens.
+        e.preventDefault()
+        openChat()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -813,6 +955,8 @@ export function App() {
 
   const onCanvasKey = (e: KeyboardEvent<HTMLElement>) => {
     if (e.target !== e.currentTarget || !snapshot) return
+    // With the nudge row on, arrows and Enter belong to it (the window handler).
+    if (nudge && (e.key === 'Enter' || isArrowKey(e.key))) return
     const cur = selected
     if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault()
@@ -1037,10 +1181,16 @@ export function App() {
   return (
     <div className="app">
       <Header
-        tool={tool}
-        onTool={setTool}
-        toolsBlocked={toolsBlocked}
-        moveBlocked={tweakBlocked}
+        pick={{
+          pipette: pipetteOn,
+          alt: picking && alt.down,
+          blocked: toolsBlocked,
+          compact: learned && !isAndroid,
+          mac: IS_MAC,
+          onPipette: () => setPipette((v) => !v),
+        }}
+        coach={coachOpen ? { onClose: closeCoach } : null}
+        t={t}
         target={isAndroid ? 'android' : 'web'}
         urlDraft={urlDraft}
         onUrlDraft={setUrlDraft}
@@ -1059,9 +1209,9 @@ export function App() {
 
       <main
         ref={canvasRef}
-        className={`canvas${isAndroid || !url ? ' canvas--dots' : ''}`}
+        className={`canvas${isAndroid || !url ? ' canvas--dots' : ''}${picking && !isAndroid ? ' canvas--picking' : ''}`}
         tabIndex={snapshot ? 0 : -1}
-        aria-label={t('canvas.label')}
+        aria-label={isAndroid ? t('canvas.labelAndroid') : t('canvas.label')}
         onKeyDown={onCanvasKey}
       >
         {isAndroid ? (
@@ -1168,24 +1318,29 @@ export function App() {
             snapshot={snapshot}
             overrides={overrides}
             selectedId={selectedId}
-            tool={tool}
-            canMove={canMove}
-            resizable={resizable}
+            alt={alt.down}
+            pipette={pipetteOn}
+            clickSelects={isAndroid}
+            canTweak={!tweakBlocked}
             scale={device.scale}
             offset={{ x: device.x, y: device.y }}
             canvasWidth={canvasBox.w}
             marks={marks}
             unread={chat?.kind === 'node' && selected ? new Set([...unreadNodes].filter((id) => id !== selected.id)) : unreadNodes}
             selectedWorking={selectedWorking}
+            stale={stale}
             onDragChange={setDragging}
             onSelect={selectNode}
+            onPicked={onPicked}
             onOverride={setOverride}
+            onForwardWheel={isAndroid ? undefined : web.forwardWheel}
+            apiRef={overlayApi}
           />
         )}
 
         {/* Closing cards fade out here, outside React: a re-rendered copy would remount and steal focus. */}
         <div className="float" ref={ghostRef} aria-hidden="true" />
-        <div className="float" ref={floatRef}>
+        <div className={`float${floatStale ? ' float--stale' : ''}`} ref={floatRef}>
           {showFloat && chat?.kind === 'missing' && (
             <div
               className="float__card float__card--chat side-corner"
@@ -1250,9 +1405,8 @@ export function App() {
                   snapshot={snapshot}
                   node={selected}
                   override={selectedOverride}
-                  toolMoves={tool === 'move'}
-                  moveOn={moveOn}
-                  resizeOn={resizeOn}
+                  nudge={nudge}
+                  nudgeExit={nudgeExit}
                   tweakBlocked={tweakBlocked}
                   hideBlocked={hideBlocked}
                   waiting={selectedWaiting}
@@ -1261,8 +1415,9 @@ export function App() {
                   focusRequest={focusRequest}
                   onSelect={selectNode}
                   onOpenChat={openChat}
-                  onToggleMove={() => setMoveOn((v) => !v)}
-                  onToggleResize={() => setResizeOn((v) => !v)}
+                  onDeselect={() => selectNode(null)}
+                  onToggleNudge={(kind) => setNudge((v) => (v === kind ? null : kind))}
+                  onNudge={nudgeBy}
                   onToggleHidden={toggleHidden}
                   onClearOverride={() => clearOverride(selected.id)}
                   onStopWaiting={stopWaiting}

@@ -1,10 +1,15 @@
 /**
- * Tool shortcuts pressed while focus is inside the target page.
+ * Keys pressed while focus is inside the target page.
  *
- * With the Hand tool a click lands in the iframe, and from then on every key press
- * goes to the page's document, not to the window: V / M / H / C would silently stop
- * working. The inspector hands these few letters back to the window, which runs
- * them through its own shortcut handler (guards included).
+ * The page is live by default: a click lands in the iframe, and from then on every key
+ * press goes to the page's document, not to the window. The window's own shortcuts would
+ * silently stop working, so the inspector hands a few keys back:
+ * - `c` — chat with the selected layer;
+ * - `Escape` — the window's Escape stack (chat → details → nudge → pipette → selection).
+ *   Forwarded, never swallowed: the page may close its own modal with it;
+ * - arrows — only while the palette's nudge row is on (the window tells the inspector).
+ *
+ * Alt is the selection modifier: its state is reported separately (see `altHeld`).
  *
  * Pure on purpose: both sides import it (the inspector to decide, the window to
  * validate what arrives), and node --test covers it without a DOM.
@@ -12,7 +17,9 @@
 
 import { PROTOCOL_TAG } from '../shared/protocol.ts'
 
-export const FORWARDED_KEYS = ['v', 'm', 'h', 'c'] as const
+export const FORWARDED_LETTERS = ['c'] as const
+export const FORWARDED_ARROWS = ['ArrowLeft', 'ArrowUp', 'ArrowDown', 'ArrowRight'] as const
+export const FORWARDED_KEYS = [...FORWARDED_LETTERS, 'Escape', ...FORWARDED_ARROWS] as const
 export type ForwardedKey = (typeof FORWARDED_KEYS)[number]
 
 /** Inspector → window. Kept next to the logic until the shared protocol absorbs it. */
@@ -21,6 +28,8 @@ export interface InspectorKeyMessage {
   from: 'inspector'
   t: 'key'
   key: ForwardedKey
+  /** Arrows only: Shift makes a nudge step 8 units. */
+  shift?: boolean
 }
 
 export interface KeyLike {
@@ -29,6 +38,7 @@ export interface KeyLike {
   ctrlKey: boolean
   metaKey: boolean
   altKey: boolean
+  shiftKey?: boolean
   repeat?: boolean
   isComposing?: boolean
   defaultPrevented?: boolean
@@ -43,8 +53,8 @@ export interface TargetLike {
 
 /**
  * <input> types whose keys are text. The rest (checkbox, radio, range, color, button,
- * submit, reset, file, image, hidden) take no letters, so after a Hand-tool click on
- * one of them the tool shortcuts must keep working.
+ * submit, reset, file, image, hidden) take no letters, so after a click on one of them
+ * the window shortcuts must keep working.
  */
 const TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
   'text',
@@ -63,9 +73,9 @@ const TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
 
 /**
  * The user is typing into the page: its keys are text, never shortcuts.
- * A focused <select> counts too: it uses printable keys for type-ahead (pressing "m"
- * jumps to the first option starting with M), and every forwarded key is a printable
- * letter, so taking those keys away would change the user's selection behind their back.
+ * A focused <select> counts too: it uses printable keys for type-ahead and arrows to
+ * change the option, so taking those keys away would change the user's selection
+ * behind their back.
  */
 export function isTypingTarget(target: TargetLike | null | undefined): boolean {
   if (!target) return false
@@ -95,21 +105,25 @@ export function keyTarget(e: KeyEventLike): TargetLike | null {
 }
 
 /**
- * Which tool shortcut this key press is, if any. The physical key counts too, so a
+ * Which window key this press is, if any. The physical key counts too for letters, so a
  * non-Latin layout still works (same rule as the window's own handler). A key the page
- * already handled (`defaultPrevented`) stays the page's.
+ * already handled (`defaultPrevented`) stays the page's. Arrows go only while `arrows`
+ * (the nudge row is on) and never from a field: there they move the caret.
  */
-export function forwardedKey(e: KeyLike, target: TargetLike | null | undefined): ForwardedKey | null {
-  if (e.ctrlKey || e.metaKey || e.altKey || e.repeat || e.isComposing || e.defaultPrevented) return null
+export function forwardedKey(e: KeyLike, target: TargetLike | null | undefined, opts: { arrows?: boolean } = {}): ForwardedKey | null {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.defaultPrevented) return null
   if (isTypingTarget(target)) return null
+  if (e.key === 'Escape') return e.repeat ? null : 'Escape'
+  if ((FORWARDED_ARROWS as readonly string[]).includes(e.key)) return opts.arrows ? (e.key as ForwardedKey) : null
+  if (e.repeat) return null
   const k = e.key.toLowerCase()
-  for (const letter of FORWARDED_KEYS) {
+  for (const letter of FORWARDED_LETTERS) {
     if (k === letter || e.code === `Key${letter.toUpperCase()}`) return letter
   }
   return null
 }
 
-/** The window's check of an incoming message: right shape and one of the four letters only. */
+/** The window's check of an incoming message: right shape and one of the forwarded keys only. */
 export function isKeyMessage(data: unknown): data is InspectorKeyMessage {
   if (!data || typeof data !== 'object') return false
   const d = data as Record<string, unknown>
@@ -118,6 +132,25 @@ export function isKeyMessage(data: unknown): data is InspectorKeyMessage {
     d.from === 'inspector' &&
     d.t === 'key' &&
     typeof d.key === 'string' &&
-    (FORWARDED_KEYS as readonly string[]).includes(d.key)
+    (FORWARDED_KEYS as readonly string[]).includes(d.key) &&
+    (d.shift === undefined || typeof d.shift === 'boolean')
   )
+}
+
+export interface ModifierLike {
+  altKey: boolean
+  ctrlKey?: boolean
+  /** Set on key events; pointer and wheel events have none. */
+  key?: string
+}
+
+/**
+ * Alt is held as the selection modifier. AltGr is not: on Windows it arrives as
+ * `key === 'AltGraph'` or as Ctrl+Alt (Polish, German layouts), and it types characters.
+ * The one source of truth is the event's own `altKey`: a flag kept from keydown/keyup
+ * sticks after Alt+Tab, when the keyup goes to another app.
+ */
+export function altHeld(e: ModifierLike): boolean {
+  if (e.key === 'AltGraph') return false
+  return e.altKey && !e.ctrlKey
 }

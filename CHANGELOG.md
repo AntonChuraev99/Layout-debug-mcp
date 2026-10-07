@@ -14,7 +14,7 @@ First public release. Install is clone-based (`npm install` + `npm run dev`); on
 - Normalized snapshot shared by both targets (`pxPerUnit`, anchors, flat properties).
 - Built-in chat on the Claude Agent SDK and an edit request queue.
 - MCP stdio server with `layout_snapshot`, `selected_element`, `pending_requests`, `reply_in_window`.
-- Header tool group: Select (`V`), Move (`M`), Hand (`H`, clicks go to the page). Keyboard navigation of the tree on the frame (`Enter`, `Shift+Enter`, `Tab`); shortcuts work with non-Latin layouts.
+- No modes: the page stays live by default; hold `Alt` (`⌥ Option` on macOS) to highlight a layer, `Alt`+click to select, `Alt`+wheel or a repeated `Alt`+click for the parent. Header pipette for a one-shot pick and an always-visible `Alt` hint; one-time first-run hint. The selected layer is dragged by its body or label and resized by four corner handles; Move / Resize in the palette nudge with the arrow keys. On Android a plain click selects. Keyboard navigation of the tree on the frame (`Enter`, `Shift+Enter`, `Tab`); shortcuts work with non-Latin layouts.
 - Action palette next to the selected element: Chat with AI (`C`), Move, Resize, Hide / Show, Copy anchor, Reset edits, Stop waiting, Details (children and properties).
 - Per-element chat popover with thread history, tied to the element's anchor.
 - Shimmering blur over an element while the agent works, queued and done marks.
@@ -50,7 +50,7 @@ First public release. Install is clone-based (`npm install` + `npm run dev`); on
 - Under React StrictMode a late `onclose` of a discarded socket showed "Server not responding" while connected.
 - Web live edits restore the element's own inline styles when cleared, size overrides work on flex items, and moved elements are measured without counting the move twice.
 - Blank white window when the browser reached it over IPv4 while Vite listened only on `::1`.
-- With the Hand tool, `V` / `M` / `H` / `C` stopped working once focus moved into the page; the inspector now forwards them to the window (not while typing in a field).
+- `Alt`, `C` and `Esc` stopped working once focus moved into the page; the inspector now forwards them to the window (not while typing in a field).
 - MCP "server is unreachable" now names the address it tried, the network error and the variable the address came from, with a hint for a server started on a custom `LD_SERVER_PORT`. A blank `LD_SERVER_URL` falls back to the port instead of an empty address.
 - `npm run dev` kept running half-started when the server port was taken.
 - Killing the dev runner (`scripts/dev.mjs`) outright on Windows instead of pressing Ctrl+C left orphaned node processes holding the ports. The runner now kills whole process trees when it stops, and a detached watchdog takes the runner and its children down when either the runner itself or its parent process (`npm`, or the `cmd`/`sh` it runs the script through) is killed outright — so killing only the `npm` pid no longer leaves vite/tsx holding the ports.

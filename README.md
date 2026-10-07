@@ -220,15 +220,22 @@ MCP is pull-only: the agent doesn't hear about new requests by itself. Ask it to
   <img src="./.github/media/element-chat.png" width="49%" alt="Element chat with a queued request">
 </p>
 
-### Tools (header)
+### Selecting a layer
 
-| Tool | Key | What it does |
-|---|---|---|
-| Select | `V` | Hover highlights the tightest box under the cursor, click selects the layer and opens its action palette |
-| Move | `M` | Drag moves the element **in the page / on the device**; a label shows the offset, a corner handle resizes |
-| Hand | `H` | The overlay steps aside: on the web clicks go to the page, so you can press buttons and navigate; selection comes back with `V` / `M` |
+There are no modes: on the web the page stays live, so clicks, scrolling and typing go to it. Layers are picked on top of it:
 
-With the frame focused: `Enter` goes down to the first child, `Shift+Enter` up to the parent, `Tab` / `Shift+Tab` to siblings. `Esc` closes the chat, then Details, then clears the selection. Shortcuts also work with a non-Latin keyboard layout.
+| Action | What it does |
+|---|---|
+| Hold `Alt` (`⌥ Option` on macOS) | Highlights the tightest box under the cursor; the hint in the header lights up |
+| `Alt`+click | Selects the layer and opens its action palette. Another `Alt`+click on the same spot goes up to the parent |
+| `Alt`+wheel | Up to the parent / back down to the tightest layer under the cursor |
+| Pipette (header) | Picks one layer without a key, then turns itself off |
+| Drag the selected layer | Moves the element **in the page / on the device**; corner handles resize. A layer covering most of the frame is dragged by its label, so the page under it stays clickable |
+| `Esc` or ✕ in the palette | Clears the selection |
+
+Clicks outside the selected layer go to the page and keep the selection. On Android the window can't send clicks to the device yet, so a plain hover highlights and a plain click selects.
+
+With the frame focused: `Enter` goes down to the first child, `Shift+Enter` up to the parent, `Tab` / `Shift+Tab` to siblings. `Esc` closes the first-run hint, the chat, Details, arrow nudging and the pipette in turn, then clears the selection. Shortcuts also work with a non-Latin keyboard layout.
 
 On the web the header also has a **Page address** field: paste any dev server URL and press Open.
 
@@ -239,8 +246,8 @@ Appears next to the selected element, with breadcrumbs of its parents on top:
 | Action | What it does |
 |---|---|
 | Chat with AI (`C`) | Opens the element's thread: history for this element and a composer |
-| Move | Drag the element right in the frame |
-| Resize | Handle at the bottom-right corner |
+| Move | Nudge with the arrow keys: 1 unit, `Shift` for 8; `Enter` finishes. Dragging works without it |
+| Resize | Change width and height with the arrow keys; corner handles work without it |
 | Hide / Show | Hide the element, its space stays reserved (web only for now) |
 | Copy anchor | Copies the best anchor for finding it in code (`file:line`, then test id, id, class string, path) |
 | Reset edits | Restores the element as it is in code |
@@ -364,7 +371,7 @@ Found a vulnerability? See [SECURITY.md](./SECURITY.md).
 - Live edits are a **preview**, not code: they vanish on page reload or app rebuild until the agent writes them into the source.
 - MCP is pull-only. A request sent to the MCP queue stays "Agent editing" until the agent replies with its `requestId`, or you press "Stop waiting".
 - On npm 11, `npm install` may print an `allow-scripts` warning for `esbuild`; it's harmless (the binary comes from esbuild's platform package).
-- **Web:** the page is shown in an `iframe`, so a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes and synced at most once a second. `file:line` needs your own `data-source-loc` build step (no plugin shipped yet). In a text field inside a closed shadow root (`mode: 'closed'`), V / M / H / C still type but also switch the tool: from outside, such a field can't be told apart from a plain element.
+- **Web:** the page is shown in an `iframe`, so a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes and synced at most once a second. `file:line` needs your own `data-source-loc` build step (no plugin shipped yet). In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
 - **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
 
 ## Troubleshooting

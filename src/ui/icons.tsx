@@ -27,10 +27,28 @@ function Icon({ children, size = 16, ...rest }: SVGProps<SVGSVGElement> & { size
   )
 }
 
-export const IconPointer = (p: P) => (
+export const IconPipette = (p: P) => (
   <Icon {...p}>
-    <path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" />
+    <path d="m12 9-8.414 8.414A2 2 0 0 0 3 18.828v1.344a2 2 0 0 1-.586 1.414A2 2 0 0 1 3.828 21h1.344a2 2 0 0 0 1.414-.586L15 12" />
+    <path d="m18 9 .4.4a1 1 0 1 1-3 3l-3.8-3.8a1 1 0 1 1 3-3l.4.4 3.4-3.4a1 1 0 1 1 3 3z" />
+    <path d="m2 22 .414-.414" />
   </Icon>
+)
+export const IconChevronUp = (p: P) => (
+  <Icon {...p}>
+    <path d="m18 15-6-6-6 6" />
+  </Icon>
+)
+export const IconChevronDown = (p: P) => (
+  <Icon {...p}>
+    <path d="m6 9 6 6 6-6" />
+  </Icon>
+)
+/** Six dots of a drag grip, 8×12, drawn filled (not a Lucide stroke icon). */
+export const GripDots = () => (
+  <svg width="8" height="12" viewBox="0 0 8 12" aria-hidden="true" focusable="false" className="grip">
+    {[2, 6].map((x) => [2, 6, 10].map((y) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.2" fill="currentColor" />))}
+  </svg>
 )
 export const IconMove = (p: P) => (
   <Icon {...p}>
@@ -40,14 +58,6 @@ export const IconMove = (p: P) => (
     <path d="M2 12h20" />
     <path d="m5 9-3 3 3 3" />
     <path d="m9 5 3-3 3 3" />
-  </Icon>
-)
-export const IconHand = (p: P) => (
-  <Icon {...p}>
-    <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
-    <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
-    <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
-    <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
   </Icon>
 )
 export const IconChat = (p: P) => (

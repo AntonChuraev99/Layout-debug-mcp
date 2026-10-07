@@ -1,4 +1,4 @@
-import { expect, openWindow, test } from './helpers'
+import { CANVAS_NAME, expect, openWindow, test } from './helpers'
 
 /**
  * No silent white page: when the window's scripts fail to load (seen as one module refused
@@ -33,7 +33,7 @@ test('26 a healthy boot never shows the fallback, even past its 15 s backstop', 
   await page.clock.fastForward(20_000)
   await expect(page.locator('#boot-error')).toBeHidden()
   await expect(page.locator('#boot-error')).toBeEmpty()
-  await expect(page.getByRole('main', { name: 'Frame: select a layer' })).toBeVisible()
+  await expect(page.getByRole('main', { name: CANVAS_NAME })).toBeVisible()
 })
 
 test('26b a slow first render: backstop panel shows, then leaves once the app paints', async ({ page }) => {
@@ -51,7 +51,7 @@ test('26b a slow first render: backstop panel shows, then leaves once the app pa
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('the app did not render within 15 s')
   release()
-  await expect(page.getByRole('main', { name: 'Frame: select a layer' })).toBeVisible()
+  await expect(page.getByRole('main', { name: CANVAS_NAME })).toBeVisible()
   await expect(page.locator('#boot-error')).toBeHidden()
   await expect(page.locator('#boot-error')).toBeEmpty()
 })
@@ -104,6 +104,6 @@ test('27 Reload in the fallback reloads into a working window', async ({ page })
   await expect(page.getByRole('alert')).toBeVisible({ timeout: 5_000 })
   block = false
   await page.getByRole('button', { name: 'Reload page' }).click()
-  await expect(page.getByRole('main', { name: 'Frame: select a layer' })).toBeVisible()
+  await expect(page.getByRole('main', { name: CANVAS_NAME })).toBeVisible()
   await expect(page.locator('#boot-error')).toBeHidden()
 })
