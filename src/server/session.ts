@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto'
 import type {
   ChatMessage,
   EditRequest,
+  ErrorCode,
   LayoutNode,
   NodeId,
   Override,
   Rect,
+  RequestStatus,
   Snapshot,
 } from '../shared/protocol.ts'
 
@@ -101,16 +103,74 @@ export class Session {
       unit: snapshot.unit,
       pxPerUnit: snapshot.pxPerUnit,
       consumed: false,
+      status: 'queued',
     }
 
     this.requests.push(request)
     return request
   }
 
-  markConsumed(ids?: string[]) {
+  /**
+   * Marks requests as read by an MCP client. `ids` limits it to those requests;
+   * omitted means every unconsumed one (older MCP builds). A request that flips goes
+   * `working` unless it already finished (`done`/`error` are never demoted).
+   * Returns the ids that actually flipped from unconsumed to consumed.
+   */
+  markConsumed(ids?: string[]): string[] {
+    const flipped: string[] = []
     for (const r of this.requests) {
-      if (!ids || ids.includes(r.id)) r.consumed = true
+      if (r.consumed || (ids && !ids.includes(r.id))) continue
+      r.consumed = true
+      flipped.push(r.id)
+      this.setStatus(r.id, 'working')
     }
+    return flipped
+  }
+
+  /**
+   * Moves a request to `status`. Returns false (and changes nothing) for an unknown
+   * id, for no change, and for a move away from a finished state: `done` is final,
+   * and `error` can only be resolved to `done` (an MCP reply that names the request).
+   */
+  setStatus(id: string, status: RequestStatus, code?: ErrorCode, message?: string): boolean {
+    const r = this.requests.find((x) => x.id === id)
+    if (!r) return false
+    const current = r.status ?? 'queued'
+    if (current === 'done') return false
+    if (current === 'error' && status !== 'done') return false
+    if (current === status && status !== 'error') return false
+    r.status = status
+    if (status === 'error') {
+      r.errorCode = code ?? 'agent_failed'
+      r.errorMessage = message
+    } else {
+      delete r.errorCode
+      delete r.errorMessage
+    }
+    return true
+  }
+
+  /**
+   * A chat message from an MCP client (`reply_in_window`). With a `requestId` that
+   * names a known request the message carries it and that request — only that one —
+   * goes `done`. An unknown id still delivers the message, untied, so a typo never
+   * swallows the reply. Returns the message and whether the id matched.
+   *
+   * A reply is proof the request was read, so it is also marked consumed: otherwise a
+   * client that peeked with `markConsumed:false` (or got the id another way) would see
+   * the answered request as NEW on its next `pending_requests` and apply it twice.
+   */
+  addReply(text: string, role: 'assistant' | 'system', requestId?: string): { message: ChatMessage; matched: boolean } {
+    const request = requestId ? this.requests.find((r) => r.id === requestId) : undefined
+    const matched = Boolean(request)
+    const message: ChatMessage = { id: `mcp-${randomUUID()}`, role, text }
+    if (request) {
+      message.requestId = request.id
+      request.consumed = true
+      this.setStatus(request.id, 'done')
+    }
+    this.addChat(message)
+    return { message, matched }
   }
 
   clearRequests() {

@@ -4,6 +4,11 @@ dist/
 *.stackdump
 .DS_Store
 
+# e2e artifacts (Playwright)
+test-results/
+playwright-report/
+blob-report/
+
 # local config and secrets
 layout-debug.config.json
 .env

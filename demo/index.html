@@ -74,6 +74,8 @@
       </section>
     </main>
 
-    <script src="http://127.0.0.1:5175/inspector.js"></script>
+    <!-- The demo is served by the layout-debug server itself, so a root-relative
+         src follows LD_SERVER_PORT. A real page uses http://127.0.0.1:<port>/inspector.js. -->
+    <script src="/inspector.js"></script>
   </body>
 </html>

@@ -50,7 +50,7 @@ function readConfigFile(path: string): Partial<Config> {
     if (code === 'ENOENT') return {}
     // A malformed config is worth shouting about — silently falling back to
     // defaults would look like the file was ignored.
-    console.error(`[layout-debug] не смог прочитать ${path}: ${(err as Error).message}`)
+    console.error(`[layout-debug] could not read ${path}: ${(err as Error).message}`)
     return {}
   }
 }

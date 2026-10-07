@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Select a layout layer on a live UI, move it for real, and hand the result to an AI agent.",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "server": "tsx watch src/server/index.ts",
@@ -11,7 +14,9 @@
     "build": "npm run build:inspector && vite build",
     "build:inspector": "vite build --config vite.inspector.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\""
+    "test": "node scripts/run-tests.mjs",
+    "test:e2e": "playwright test",
+    "typecheck:e2e": "tsc --noEmit -p tests/e2e"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",
@@ -22,6 +27,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

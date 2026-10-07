@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { LayoutNode, NodeId, Override, Snapshot } from '../shared/protocol.ts'
+import type { ErrorCode, LayoutNode, NodeId, Override, Snapshot } from '../shared/protocol.ts'
+import { LocalizedError } from './i18n.ts'
 
 const exec = promisify(execFile)
 
@@ -66,13 +67,13 @@ export class AndroidAdapter {
   async capture(): Promise<Snapshot> {
     const res = await this.request('/tree')
     const tree = (await res.json()) as DeviceTree
-    if (tree.error) throw new Error(`агент на устройстве: ${tree.error}`)
+    if (tree.error) throw new LocalizedError('deviceAgentError', { reason: tree.error })
     return normalize(tree)
   }
 
   async screenshot(): Promise<Buffer> {
     const res = await this.request('/screenshot')
-    if (!res.ok) throw new Error(`скриншот: HTTP ${res.status}`)
+    if (!res.ok) throw new LocalizedError('deviceScreenshotError', { status: res.status })
     return Buffer.from(await res.arrayBuffer())
   }
 
@@ -93,6 +94,35 @@ export class AndroidAdapter {
     await this.request('/overrides/clear')
   }
 
+  private model: string | null = null
+
+  /**
+   * `ro.product.model` ("Pixel 8") for the window's device chip. Null when adb cannot
+   * tell — no adb, no device, several devices without LD_DEVICE — logged, never thrown:
+   * a missing model must not keep the window from getting `ready`. Only a found model
+   * is cached, so plugging the device in later is picked up by the next window.
+   */
+  async deviceModel(): Promise<string | null> {
+    if (this.model) return this.model
+    const args = this.device ? ['-s', this.device] : []
+    try {
+      const { stdout } = await exec('adb', [...args, 'shell', 'getprop', 'ro.product.model'], { timeout: 3_000 })
+      const model = stdout.trim()
+      if (!model) {
+        console.warn('[layout-debug] adb returned an empty ro.product.model; the device chip shows a generic name')
+        return null
+      }
+      this.model = model
+      return model
+    } catch (err) {
+      console.warn(
+        `[layout-debug] could not read the device model via adb (${err instanceof Error ? err.message.split('\n')[0] : String(err)}); ` +
+          'the device chip shows a generic name',
+      )
+      return null
+    }
+  }
+
   /** Which devices adb can see — used to explain "no device" with actual data. */
   static async devices(): Promise<string[]> {
     const { stdout } = await exec('adb', ['devices'])
@@ -103,6 +133,30 @@ export class AndroidAdapter {
       .filter((line) => line.endsWith('device'))
       .map((line) => line.split(/\s+/)[0]!)
   }
+}
+
+/**
+ * Why a device capture failed, as an ErrorCode the window branches on (the
+ * localized text next to it is for people only). Pure; exported for tests.
+ */
+export function classifyCaptureError(err: unknown): ErrorCode {
+  if (err instanceof LocalizedError) {
+    if (err.key === 'deviceAgentError') return 'device_no_bridge'
+    if (err.key === 'deviceScreenshotError') return 'screenshot'
+  }
+  const e = err as { code?: unknown; message?: unknown; stderr?: unknown; cause?: { code?: unknown } } | null
+  const text = [e?.message, e?.stderr].filter((s) => typeof s === 'string').join('\n')
+  if (e?.code === 'ENOENT' || /ENOENT|not recognized|spawn adb/i.test(text)) return 'device_no_adb'
+  if (/no devices|no emulators|device .*not found|device offline|unauthorized/i.test(text)) return 'device_not_found'
+  // adb forward worked but nothing answers on the port: the app is not running or has no bridge.
+  if (
+    /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|timed? ?out|aborted/i.test(text) ||
+    e?.cause?.code === 'ECONNREFUSED' ||
+    e?.cause?.code === 'ECONNRESET'
+  ) {
+    return 'device_no_bridge'
+  }
+  return 'device'
 }
 
 /**
@@ -134,7 +188,7 @@ function normalize(tree: DeviceTree): Snapshot {
         y: dp(n.bounds.y),
         // Compose tweaks land on the node that owns the modifier chain; a node without
         // one can be selected and described but not dragged.
-        movable: n.movable ? 'да' : 'нет',
+        movable: n.movable ? 'yes' : 'no',
       },
     }
   }

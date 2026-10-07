@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 18 18" fill="none">
+  <!-- Brand glyph (src/ui/icons.tsx BrandGlyph): a frame with a dashed layer inside — "the layer you picked". -->
+  <rect x="1" y="1" width="16" height="16" rx="4.25" fill="#17181c" stroke="#e0398f" stroke-width="1.5" />
+  <rect x="5" y="5" width="8" height="8" rx="1.5" stroke="#ecedef" stroke-width="1.5" stroke-dasharray="2 1.6" />
+</svg>

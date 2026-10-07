@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: data-source-loc</title>
+    <style>
+      body { margin: 0; padding: 48px; font: 16px/1.4 system-ui, sans-serif; }
+      .card { display: flex; flex-direction: column; gap: 12px; width: 360px; padding: 20px; border-radius: 14px; background: #eef2ff; }
+      .pay { padding: 12px 18px; font: inherit; border: 0; border-radius: 10px; background: #4c8dff; color: #fff; }
+    </style>
+  </head>
+  <body>
+    <!-- What a compile-time plugin (babel/vite) writes on every JSX element. -->
+    <section class="card" data-source-loc="src/components/PlanCard.tsx:12">
+      <h2 data-source-loc="src/components/PlanCard.tsx:14">Yearly plan</h2>
+      <button class="pay" type="button" data-testid="pay" data-source-loc="src/components/PayButton.tsx:42">Pay</button>
+    </section>
+    __INSPECTOR__
+  </body>
+</html>

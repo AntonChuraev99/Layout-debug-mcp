@@ -35,8 +35,8 @@ const ALLOWED_HOSTS = new Set(LOOPBACK_NAMES.flatMap((name) => [SERVER_PORT, UI_
  */
 export function checkHost(headers: Headers): Verdict {
   const host = header(headers, 'host')?.trim().toLowerCase()
-  if (!host) return deny('нет заголовка Host')
-  if (!ALLOWED_HOSTS.has(host)) return deny(`Host "${host}" не loopback-адрес этого сервера (похоже на DNS rebinding)`)
+  if (!host) return deny('no Host header')
+  if (!ALLOWED_HOSTS.has(host)) return deny(`Host "${host}" is not a loopback address of this server (looks like DNS rebinding)`)
   return OK
 }
 
@@ -49,7 +49,7 @@ export function checkOrigin(headers: Headers): Verdict {
   const origin = header(headers, 'origin')
   if (origin === undefined) return OK
   if (UI_ORIGINS.includes(origin)) return OK
-  return deny(`Origin "${origin}" не окно layout-debug (разрешены: ${UI_ORIGINS.join(', ')})`)
+  return deny(`Origin "${origin}" is not the layout-debug window (allowed: ${UI_ORIGINS.join(', ')})`)
 }
 
 /** WebSocket `/ws`: the chat, the agent and the device live behind it. */
@@ -68,7 +68,7 @@ export function checkApiRequest(headers: Headers): Verdict {
   if (!base.ok) return base
   const site = header(headers, 'sec-fetch-site')
   if (site === 'cross-site' || site === 'same-site') {
-    return deny(`запрос со стороннего сайта (Sec-Fetch-Site: ${site})`)
+    return deny(`request from another site (Sec-Fetch-Site: ${site})`)
   }
   return OK
 }
@@ -118,38 +118,38 @@ function normalizeSegment(segment: string): string {
  * never into `.git/` or `.claude/`, never `.mcp.json` or `.env*`.
  */
 export function checkWritePath(projectDir: string, target: unknown): Verdict {
-  if (typeof target !== 'string' || !target.trim()) return deny('не указан путь файла')
+  if (typeof target !== 'string' || !target.trim()) return deny('no file path given')
   // `a/link/../b` means different files lexically and on disk; refuse the ambiguity.
-  if (target.split(/[\\/]+/).includes('..')) return deny(`путь с ".." не принимается: ${target}`)
+  if (target.split(/[\\/]+/).includes('..')) return deny(`paths with ".." are not accepted: ${target}`)
 
   let root: string
   try {
     root = realpathSync.native(projectDir)
   } catch {
-    return deny(`projectDir недоступен: ${projectDir}`)
+    return deny(`projectDir is not accessible: ${projectDir}`)
   }
 
   const real = resolveReal(resolve(root, target))
-  if (real === null) return deny(`не удалось разобрать путь: ${target}`)
+  if (real === null) return deny(`could not resolve the path: ${target}`)
 
   const rel = relative(root, real)
-  if (!rel) return deny('путь указывает на сам каталог проекта, а не на файл')
+  if (!rel) return deny('the path points at the project directory itself, not at a file')
   if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) {
-    return deny(`${target} лежит вне проекта (${root}) — писать можно только внутри него`)
+    return deny(`${target} is outside the project (${root}); writes are allowed only inside it`)
   }
 
   const segments = rel.split(sep).map(normalizeSegment)
-  if (segments.includes('.git')) return deny(`${target}: каталог .git/ — служебный, агенту туда писать нельзя`)
+  if (segments.includes('.git')) return deny(`${target}: .git/ is internal, the agent may not write there`)
   // The agent loads project settings on every run: a hook or MCP server written
   // here would run as a command next time, past the Bash ban.
   if (segments.includes('.claude')) {
-    return deny(`${target}: каталог .claude/ — настройки и хуки Claude Code, агенту туда писать нельзя`)
+    return deny(`${target}: .claude/ holds Claude Code settings and hooks, the agent may not write there`)
   }
   if (segments.includes('.mcp.json')) {
-    return deny(`${target}: .mcp.json подключает MCP-серверы (запуск команд), агенту его менять нельзя`)
+    return deny(`${target}: .mcp.json registers MCP servers (runs commands), the agent may not change it`)
   }
   if (segments[segments.length - 1]!.startsWith('.env')) {
-    return deny(`${target}: файлы .env* хранят секреты окружения, агенту их менять нельзя`)
+    return deny(`${target}: .env* files hold environment secrets, the agent may not change them`)
   }
   return OK
 }
