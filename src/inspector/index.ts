@@ -5,6 +5,7 @@
  *
  * Loaded as a plain classic script:
  *   <script src="http://127.0.0.1:5175/inspector.js"></script>
+ * (5175 is the default; the server port follows LD_SERVER_PORT.)
  * Dev-only. It talks to the parent frame and to nothing else.
  */
 
@@ -20,7 +21,16 @@ import {
   type StyleDigest,
   type UiToInspector,
 } from '../shared/protocol.ts'
-import { UI_ORIGINS } from '../shared/ports.ts'
+import { forwardedKey, keyTarget, type InspectorKeyMessage } from './keys.ts'
+
+/**
+ * Free identifier, left as is by the bundler: the server swaps it for the JSON
+ * array of the window's origins every time it serves /inspector.js (see
+ * serveInspector). The running server is the one that knows LD_UI_PORT, so a
+ * bundle built under different env can never disagree with it.
+ */
+declare const __LD_UI_ORIGINS__: readonly string[]
+const UI_ORIGINS: readonly string[] = __LD_UI_ORIGINS__
 
 const MAX_NODES = 4000
 const SKIP_TAGS = new Set([
@@ -79,7 +89,7 @@ let parentOrigin: string | null = (() => {
   return origin && UI_ORIGINS.includes(origin) ? origin : null
 })()
 
-function post(msg: InspectorToUi) {
+function post(msg: InspectorToUi | InspectorKeyMessage) {
   if (window.parent === window) return
   for (const origin of parentOrigin ? [parentOrigin] : UI_ORIGINS) window.parent.postMessage(msg, origin)
 }
@@ -214,12 +224,19 @@ function capture(): Snapshot {
     }
   }
 
-  visit(root, null, 0)
-  elementsById = elements
-  withoutObserving(reapplyOverrides)
+  // Measure without the live moves (see liftTranslates); synchronous, so no frame
+  // shows the elements back in place. reapplyOverrides puts them back even if the
+  // walk throws, against the fresh element map.
+  withoutObserving(liftTranslates)
+  try {
+    visit(root, null, 0)
+    elementsById = elements
+  } finally {
+    withoutObserving(reapplyOverrides)
+  }
 
   if (truncated) {
-    post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'error', message: `Дерево обрезано на ${MAX_NODES} узлах` })
+    post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'error', message: `Tree truncated at ${MAX_NODES} nodes` })
   }
 
   return {
@@ -237,26 +254,68 @@ function capture(): Snapshot {
 
 // --- live overrides ---------------------------------------------------------
 
+/** Inline style properties a live override writes. */
+const OVERRIDE_PROPS = ['translate', 'width', 'height', 'flex', 'boxSizing', 'visibility'] as const
+type OverrideProp = (typeof OVERRIDE_PROPS)[number]
+
+/**
+ * The element's own inline values from before the first override, so clearing an
+ * override hands the app back exactly what it had instead of blanking its styles.
+ */
+const originals = new WeakMap<HTMLElement, Record<OverrideProp, string>>()
+
+function originalOf(el: HTMLElement): Record<OverrideProp, string> {
+  let saved = originals.get(el)
+  if (!saved) {
+    saved = Object.fromEntries(OVERRIDE_PROPS.map((p) => [p, el.style[p]])) as Record<OverrideProp, string>
+    originals.set(el, saved)
+  }
+  return saved
+}
+
 function applyOverride(o: Override) {
   const el = elementsById.get(o.nodeId)
   if (!el) return
+  const orig = originalOf(el)
+  const sized = o.width != null || o.height != null
   // `translate` is its own property, so it composes with any transform the app
   // already set instead of clobbering it.
-  el.style.translate = o.dx || o.dy ? `${o.dx}px ${o.dy}px` : ''
-  el.style.width = o.width != null ? `${o.width}px` : ''
-  el.style.height = o.height != null ? `${o.height}px` : ''
-  el.style.visibility = o.hidden ? 'hidden' : ''
+  el.style.translate = o.dx || o.dy ? `${o.dx}px ${o.dy}px` : orig.translate
+  el.style.width = o.width != null ? `${o.width}px` : orig.width
+  el.style.height = o.height != null ? `${o.height}px` : orig.height
+  // The handle measures the border box (getBoundingClientRect), and a flex item
+  // with `flex: 1` ignores `width` altogether: without these two the real element
+  // keeps its size while the overlay shows the new one.
+  el.style.flex = sized ? 'none' : orig.flex
+  el.style.boxSizing = sized ? 'border-box' : orig.boxSizing
+  el.style.visibility = o.hidden ? 'hidden' : orig.visibility
+}
+
+function restoreOriginal(el: HTMLElement) {
+  const orig = originals.get(el)
+  if (!orig) return
+  for (const p of OVERRIDE_PROPS) el.style[p] = orig[p]
+  originals.delete(el)
 }
 
 function clearOverride(nodeId: NodeId) {
   const el = elementsById.get(nodeId)
-  if (el) {
-    el.style.translate = ''
-    el.style.width = ''
-    el.style.height = ''
-    el.style.visibility = ''
-  }
+  if (el) restoreOriginal(el)
   overrides.delete(nodeId)
+}
+
+/**
+ * Snapshot bounds are where an element sits *before* its live move: the window
+ * draws `bounds + dx/dy`, so measuring with the translate applied would count the
+ * move twice. The move is lifted for the measurement only — no frame is painted
+ * in between. Size overrides stay on: they reflow the page, and the new layout is
+ * exactly what the window must show.
+ */
+function liftTranslates() {
+  for (const o of overrides.values()) {
+    const el = elementsById.get(o.nodeId)
+    if (el && (o.dx || o.dy)) el.style.translate = originalOf(el).translate
+  }
 }
 
 function reapplyOverrides() {
@@ -296,6 +355,9 @@ window.addEventListener('message', (event: MessageEvent) => {
     case 'setOverride':
       overrides.set(data.override.nodeId, data.override)
       withoutObserving(() => applyOverride(data.override))
+      // A size change reflows the page: neighbours (and the element itself, in a
+      // centred or justified row) move, so the window needs fresh bounds.
+      scheduleCapture()
       break
     case 'clearOverride':
       withoutObserving(() => clearOverride(data.nodeId))
@@ -310,6 +372,14 @@ window.addEventListener('message', (event: MessageEvent) => {
   }
 })
 
+// Focus stays in the page after a Hand-tool click; give the tool shortcuts back to the
+// window (src/inspector/keys.ts). Bubble phase, so a key the page handled stays the page's.
+// The key is not swallowed: in Hand mode the page is live and may want it too.
+window.addEventListener('keydown', (e: KeyboardEvent) => {
+  const key = forwardedKey(e, keyTarget(e))
+  if (key) post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'key', key })
+})
+
 window.addEventListener('resize', () => scheduleCapture())
 window.addEventListener('scroll', () => scheduleCapture(200), { passive: true, capture: true })
 
@@ -319,7 +389,7 @@ observe()
 
 if (window.parent === window) {
   // eslint-disable-next-line no-console
-  console.warn('[layout-debug] инспектор загружен вне iframe — открой страницу через окно layout-debug-mcp')
+  console.warn('[layout-debug] the inspector is loaded outside an iframe; open the page through the layout-debug-mcp window')
 } else {
   post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'hello', version: PROTOCOL_VERSION, url: location.href })
   scheduleCapture(0)

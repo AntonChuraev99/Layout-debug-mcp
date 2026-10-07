@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: click counter</title>
+    <style>
+      body { margin: 0; padding: 48px; font: 16px/1.4 system-ui, sans-serif; background: #f4f5f7; }
+      .stage { display: flex; gap: 16px; }
+      button { padding: 14px 22px; font: inherit; border: 0; border-radius: 10px; background: #4c8dff; color: #fff; }
+    </style>
+  </head>
+  <body>
+    <main class="stage">
+      <!-- A click that reaches the page itself changes this text: proof the overlay let it through. -->
+      <button
+        type="button"
+        data-testid="counter"
+        onclick="this.dataset.clicks = String(Number(this.dataset.clicks || 0) + 1); this.textContent = 'Clicked ' + this.dataset.clicks"
+      >Click me</button>
+    </main>
+    __INSPECTOR__
+  </body>
+</html>

@@ -1,12 +1,135 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>layout-debug</title>
+    <style>
+      /* Graphite from the first paint: no white flash before styles.css, no white frame around the panel. */
+      html, body { margin: 0; background: #17181c; }
+      /* Boot-failure panel: lives outside React, so it shows even when the app never loads. */
+      #boot-error {
+        box-sizing: border-box;
+        min-height: 100vh;
+        margin: 0;
+        padding: 48px 24px;
+        background: #17181c;
+        color: #ecedef;
+        font: 14px/1.5 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+      }
+      #boot-error[hidden] { display: none; }
+      #boot-error .be__card { max-width: 520px; margin: 0 auto; }
+      #boot-error .be__title { margin: 0 0 8px; font-size: 18px; font-weight: 600; line-height: 1.3; }
+      #boot-error .be__cause { margin: 0 0 4px; color: #ecedef; overflow-wrap: anywhere; }
+      #boot-error .be__hint { margin: 0 0 20px; color: #a3a5ad; }
+      #boot-error code { font-family: 'Cascadia Code', ui-monospace, monospace; font-size: 13px; color: #ecedef; }
+      #boot-error .be__btn {
+        min-height: 32px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 8px;
+        background: #b81c6e;
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      #boot-error .be__btn:hover { background: #e0398f; }
+      #boot-error .be__btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/ui/main.tsx"></script>
+    <div id="boot-error" role="alert" hidden></div>
+    <script>
+      // No silent white page: if the app never renders, say why and what to do next.
+      // `force` is for a render crash, after which React has already emptied #root.
+      ;(function () {
+        var ru = false
+        // Same key as STORAGE_KEY in src/ui/i18n.ts (checked by src/ui/i18n.test.ts).
+        try {
+          ru = localStorage.getItem('layout-debug.locale') === 'ru'
+        } catch (e) {}
+        var text = ru
+          ? {
+              title: 'Окно не запустилось',
+              cause: 'Причина: ',
+              hint1: 'Обнови страницу. Если повторяется — посмотри терминал, где запущен ',
+              hint2: '.',
+              reload: 'Обновить страницу',
+              timeout: 'приложение не отрисовалось за 15 с',
+              script: 'не загрузился скрипт окна',
+            }
+          : {
+              title: "The window didn't start",
+              cause: 'Cause: ',
+              hint1: 'Reload the page. If it happens again, check the terminal running ',
+              hint2: '.',
+              reload: 'Reload page',
+              timeout: 'the app did not render within 15 s',
+              script: 'a script of the window failed to load',
+            }
+        function el(tag, cls, content) {
+          var node = document.createElement(tag)
+          if (cls) node.className = cls
+          if (content) node.textContent = content
+          return node
+        }
+        var watch = null
+        function fail(cause, force) {
+          var root = document.getElementById('root')
+          var box = document.getElementById('boot-error')
+          if (!box) return
+          // A soft cause (timeout, script) never replaces a panel already shown, nor shows over a
+          // rendered app. A render crash always wins: it is the real error, even over the timeout text.
+          if (!force && (!box.hidden || (root && root.firstElementChild))) return
+          if (watch) {
+            watch.disconnect()
+            watch = null
+          }
+          box.textContent = ''
+          var card = el('div', 'be__card')
+          card.appendChild(el('h1', 'be__title', text.title))
+          card.appendChild(el('p', 'be__cause', text.cause + cause))
+          var hint = el('p', 'be__hint', text.hint1)
+          hint.appendChild(el('code', '', 'npm run dev'))
+          hint.appendChild(document.createTextNode(text.hint2))
+          card.appendChild(hint)
+          var btn = el('button', 'be__btn', text.reload)
+          btn.type = 'button'
+          btn.onclick = function () {
+            location.reload()
+          }
+          card.appendChild(btn)
+          box.appendChild(card)
+          if (root && force) root.hidden = true
+          box.hidden = false
+          // Not a crash, just a slow first render (cold Vite pre-bundle, AV scanning
+          // node_modules): the moment the app does paint into #root, the panel is wrong — drop it.
+          if (!force && root && typeof MutationObserver === 'function') {
+            watch = new MutationObserver(function () {
+              if (!root.firstElementChild) return
+              watch.disconnect()
+              watch = null
+              box.hidden = true
+              box.textContent = ''
+            })
+            watch.observe(root, { childList: true })
+          }
+        }
+        window.__ldBootFailed = fail
+        window.__ldBootText = text
+        setTimeout(function () {
+          fail(text.timeout, false)
+        }, 15000)
+      })()
+    </script>
+    <!-- A failed fetch anywhere in the static module graph fires `error` on this tag (HTML spec). -->
+    <script
+      type="module"
+      src="/src/ui/main.tsx"
+      onerror="window.__ldBootFailed && window.__ldBootFailed(window.__ldBootText.script, false)"
+    ></script>
   </body>
 </html>

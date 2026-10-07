@@ -111,16 +111,16 @@ describe('запись агента', () => {
     denied(checkWritePath(project, `${project}/../outside/secret.txt`), /\.\./)
   })
   test('абсолютный путь вне проекта — нельзя', () => {
-    denied(checkWritePath(project, join(outside, 'secret.txt')), /вне проекта/)
+    denied(checkWritePath(project, join(outside, 'secret.txt')), /outside the project/)
   })
   test('каталог-ссылка (junction) наружу — нельзя', () => {
     symlinkSync(outside, join(project, 'linkdir'), 'junction')
-    denied(checkWritePath(project, join(project, 'linkdir', 'secret.txt')), /вне проекта/)
-    denied(checkWritePath(project, join(project, 'linkdir', 'new.txt')), /вне проекта/)
+    denied(checkWritePath(project, join(project, 'linkdir', 'secret.txt')), /outside the project/)
+    denied(checkWritePath(project, join(project, 'linkdir', 'new.txt')), /outside the project/)
   })
   test('висячая ссылка наружу — нельзя', () => {
     symlinkSync(join(outside, 'not-yet'), join(project, 'dangling'), 'junction')
-    denied(checkWritePath(project, join(project, 'dangling', 'new.txt')), /вне проекта/)
+    denied(checkWritePath(project, join(project, 'dangling', 'new.txt')), /outside the project/)
   })
   test('файловый симлинк наружу — нельзя', (t) => {
     try {
@@ -130,7 +130,7 @@ describe('запись агента', () => {
       t.skip(`симлинк не создать: ${(err as NodeJS.ErrnoException).code}`)
       return
     }
-    denied(checkWritePath(project, join(project, 'src', 'link.txt')), /вне проекта/)
+    denied(checkWritePath(project, join(project, 'src', 'link.txt')), /outside the project/)
   })
   test('.git/ — нельзя, в том числе обходными написаниями', () => {
     denied(checkWritePath(project, join(project, '.git', 'config')), /\.git/)

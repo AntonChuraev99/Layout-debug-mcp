@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: elements at the frame edges</title>
+    <style>
+      html, body { margin: 0; height: 100%; }
+      body { position: relative; font: 14px/1.4 system-ui, sans-serif; }
+      /* Full frame width: no room on either side, the palette has to go below. */
+      .bar { position: absolute; left: 0; right: 0; top: 120px; height: 56px; background: #dfe3ea; }
+      /* Hugs the right edge: no room on the right, the palette has to go left. */
+      .edge { position: absolute; right: 8px; top: 320px; width: 120px; height: 40px; background: #9cc4ff; }
+    </style>
+  </head>
+  <body>
+    <div class="bar" data-testid="bar"></div>
+    <div class="edge" data-testid="edge"></div>
+    __INSPECTOR__
+  </body>
+</html>

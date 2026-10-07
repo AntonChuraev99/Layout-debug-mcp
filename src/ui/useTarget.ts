@@ -7,6 +7,7 @@ import {
   type Snapshot,
   type UiToInspector,
 } from '../shared/protocol.ts'
+import { isKeyMessage } from '../inspector/keys.ts'
 
 /**
  * Bridge to the inspector running inside the target page. Cross-origin by
@@ -24,6 +25,16 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>) 
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
+      if (isKeyMessage(event.data)) {
+        // A tool shortcut pressed while focus sits in the page (after a Hand-tool click).
+        // Replayed as a keydown on the window, so the one shortcut handler in App applies
+        // all its guards (blocked tools, open chat) exactly as for a key typed here.
+        if (event.source === iframeRef.current?.contentWindow) {
+          const key = event.data.key
+          window.dispatchEvent(new KeyboardEvent('keydown', { key, code: `Key${key.toUpperCase()}`, cancelable: true }))
+        }
+        return
+      }
       const data = event.data as InspectorToUi | undefined
       if (!data || typeof data !== 'object' || data.tag !== PROTOCOL_TAG || data.from !== 'inspector') return
       if (event.source !== iframeRef.current?.contentWindow) return
