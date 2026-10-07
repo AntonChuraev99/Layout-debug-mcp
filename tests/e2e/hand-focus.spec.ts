@@ -10,6 +10,7 @@ import {
   hoverBox,
   openWindow,
   palette,
+  paletteField,
   selectedBox,
   selectInFrame,
   serveDir,
@@ -83,10 +84,13 @@ test('22 after a click inside the page, Alt, C and Escape still reach the window
   await page.mouse.click(30, 300)
   await expect(selectedBox(page)).toHaveCount(1)
   // Pressed by physical key code (the non-Latin-layout case itself is covered in src/inspector/keys.test.ts).
+  // C puts the caret in the palette's chat field, in the window's document.
   await page.keyboard.press('KeyC')
-  await expect(chatDialog(page)).toBeVisible()
+  await expect(paletteField(page)).toBeFocused()
 
   // Escape from the page walks the window's Escape order: chat, then the selection.
+  await palette(page).getByRole('button', { name: /^Chat with AI/ }).click()
+  await expect(chatDialog(page)).toBeVisible()
   await page.mouse.click(30, 300)
   await page.keyboard.press('Escape')
   await expect(chatDialog(page)).toHaveCount(0)
@@ -121,5 +125,5 @@ test('23 typing into a field of the page never triggers window keys', async ({ p
   // Leaving the field gives the keys back.
   await page.mouse.click(30, 300)
   await page.keyboard.press('c')
-  await expect(chatDialog(page)).toBeVisible()
+  await expect(paletteField(page)).toBeFocused()
 })

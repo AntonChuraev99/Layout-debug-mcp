@@ -226,7 +226,7 @@ There are no modes: on the web the page stays live, so clicks, scrolling and typ
 
 | Action | What it does |
 |---|---|
-| Hold `Alt` (`⌥ Option` on macOS) | Highlights the tightest box under the cursor; the hint in the header lights up |
+| Hold `Alt` (`⌥ Option` on macOS) | Highlights the tightest box under the cursor; the hint in the header lights up and a "Select to chat" bubble appears next to the cursor |
 | `Alt`+click | Selects the layer and opens its action palette. Another `Alt`+click on the same spot goes up to the parent |
 | `Alt`+wheel | Up to the parent / back down to the tightest layer under the cursor |
 | Pipette (header) | Picks one layer without a key, then turns itself off |
@@ -245,8 +245,9 @@ Appears next to the selected element, with breadcrumbs of its parents on top:
 
 | Action | What it does |
 |---|---|
-| Chat with AI (`C`) | Opens the element's thread: history for this element and a composer |
-| Move | Nudge with the arrow keys: 1 unit, `Shift` for 8; `Enter` finishes. Dragging works without it |
+| Message field (`C`) | Always open under the title: type the edit and press `Enter` — it goes to the agent and the element's chat opens with the reply. `C` puts the caret there; selecting an element does not, so the frame keeps its keys. `Esc` with text typed leaves the field and keeps the draft |
+| Chat with AI | Under the field, with the number of earlier edits: opens the element's thread (history and replies) |
+| Move | Nudge with the arrow keys: 1 unit, `Shift` for 8; `Enter` finishes. Dragging works without it. A moved element leaves a faint copy on its old place until it is reset |
 | Resize | Change width and height with the arrow keys; corner handles work without it |
 | Hide / Show | Hide the element, its space stays reserved (web only for now) |
 | Copy anchor | Copies the best anchor for finding it in code (`file:line`, then test id, id, class string, path) |

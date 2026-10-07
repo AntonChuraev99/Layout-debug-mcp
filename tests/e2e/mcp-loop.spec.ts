@@ -12,9 +12,10 @@ import {
   markOver,
   openInbox,
   openWindow,
+  paletteField,
   ROOT,
   selectInFrame,
-  sendFromChat,
+  sendFromPalette,
   serveDir,
   serverRequests,
   startMcp,
@@ -47,7 +48,8 @@ const blurred = async (page: Page, el: Locator) => (await hasMark(page, 'work', 
 async function requestAsk(page: Page, element: Locator, comment: string) {
   await selectInFrame(page, element)
   await page.keyboard.press('c')
-  await sendFromChat(page, comment)
+  await expect(paletteField(page)).toBeFocused()
+  await sendFromPalette(page, comment)
   await expect.poll(() => hasMark(page, 'queued', element), { message: `queued mark for "${comment}"` }).toBe(true)
 }
 

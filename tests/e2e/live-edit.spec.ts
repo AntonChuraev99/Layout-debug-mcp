@@ -1,13 +1,17 @@
 import {
+  altClick,
   centerOf,
   clearQueue,
+  clearSelection,
   expect,
   expectSameBox,
+  FIXTURES,
   frameOf,
   openWindow,
   palette,
   selectedBox,
   selectInFrame,
+  serveDir,
   test,
   UI_URL,
   waitForServerSnapshot,
@@ -59,6 +63,125 @@ test('4b a moved element keeps its selection box when the page re-renders', asyn
   expect(await cta.evaluate((el) => (el as HTMLElement).style.translate), 'the live edit survives the recapture').toBe('40px 20px')
   expectSameBox(await cta.boundingBox(), moved)
   expectSameBox(await selectedBox(page).boundingBox(), moved)
+})
+
+test('4c after a move, a child of the moved element is picked and boxed where it is now', async ({ page }) => {
+  // The page moves the whole subtree (`translate` on the parent), so the children
+  // must be found and outlined at the new place, not where the snapshot measured them.
+  await openWindow(page)
+  const pro = frameOf(page).locator('.row', { hasText: 'Тариф' }).locator('span', { hasText: 'Pro' })
+  const before = await centerOf(pro)
+  await selectInFrame(page, pro)
+  await expect(palette(page)).toHaveAccessibleName(/^Actions: span span "Pro"/)
+  // A repeated Alt+click on the same spot climbs to the parent: the row.
+  await altClick(page, before.x, before.y)
+  await expect(palette(page)).toHaveAccessibleName(/^Actions: div div\.row/)
+
+  const row = await selectedBox(page).boundingBox()
+  await page.mouse.move(row!.x + 40, row!.y + row!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(row!.x + 40 + 120, row!.y + row!.height / 2 + 30, { steps: 8 })
+  await page.mouse.up()
+  const row0 = frameOf(page).locator('.row', { hasText: 'Тариф' })
+  await expect.poll(() => row0.evaluate((el) => (el as HTMLElement).style.translate)).toBe('120px 30px')
+  await clearSelection(page)
+
+  const now = await centerOf(pro)
+  expect(Math.round(now.x - before.x), 'the child moved with its parent').toBe(120)
+  await altClick(page, now.x, now.y)
+  await expect(palette(page)).toHaveAccessibleName(/^Actions: span span "Pro"/)
+  await expect(async () => expectSameBox(await selectedBox(page).boundingBox(), now.box)).toPass({ timeout: 3_000 })
+
+  // Where it used to be there is nothing of it now.
+  await clearSelection(page)
+  await altClick(page, before.x, before.y)
+  await expect(palette(page)).toBeVisible()
+  await expect(palette(page)).not.toHaveAccessibleName(/^Actions: span span "Pro"/)
+})
+
+test('4d a moved element leaves a faint ghost on its old place; Reset takes it away; a resize leaves none', async ({ page }) => {
+  await openWindow(page)
+  const cta = frameOf(page).getByTestId('cta-continue')
+  const ghost = frameOf(page).locator('[data-ld-ghost="node"]')
+  await selectInFrame(page, cta)
+  const c = await centerOf(cta)
+  await page.mouse.move(c.x, c.y)
+  await page.mouse.down()
+  await page.mouse.move(c.x + 40, c.y + 60, { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(() => cta.evaluate((el) => (el as HTMLElement).style.translate)).toBe('40px 60px')
+
+  await expect(ghost).toHaveCount(1)
+  expectSameBox(await ghost.boundingBox(), c.box)
+  expect(await ghost.evaluate((el) => Number(getComputedStyle(el).opacity))).toBeLessThan(0.3)
+  expect(await ghost.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none')
+  await expect(ghost, 'the ghost reads like the element').toHaveText('Продолжить')
+  // It is nobody's element: no test id, never a layer of the snapshot.
+  await expect(frameOf(page).getByTestId('cta-continue')).toHaveCount(1)
+  const since = Date.now()
+  await frameOf(page).locator('body').evaluate((b) => b.classList.add('e2e-rerender'))
+  await waitForServerSnapshot(since, (n) => n.anchors.testId === 'cta-continue')
+  await expect(ghost, 'a recapture keeps the ghost').toHaveCount(1)
+  expectSameBox(await ghost.boundingBox(), c.box)
+
+  await palette(page).getByRole('menuitem', { name: 'Reset edits' }).click()
+  await expect(ghost).toHaveCount(0)
+  await expect.poll(() => cta.evaluate((el) => (el as HTMLElement).style.translate)).toBe('')
+
+  // A size change moves nothing away from its place: no ghost.
+  await resizeBy(page, frameOf(page).getByRole('heading', { name: 'Годовая подписка' }), 30, 10)
+  await expect(ghost).toHaveCount(0)
+})
+
+test('4e the ghost of a row in a scrolling list is cut by the list and gone once its place scrolls out', async ({ page }) => {
+  const site = await serveDir(FIXTURES)
+  try {
+    await openWindow(page, { target: `${site.url}/scroller.html`, probe: (n) => n.anchors.testId === 'item-6' })
+    const frame = frameOf(page)
+    const list = frame.getByTestId('list')
+    const row = frame.getByTestId('item-6')
+    const ghost = frame.locator('[data-ld-ghost="node"]')
+    const listBox = (await list.boundingBox())!
+    const rowBox = (await row.boundingBox())!
+    // Row 6 hangs past the bottom of the list: only its top 12 px are on screen.
+    expect(rowBox.y + rowBox.height).toBeGreaterThan(listBox.y + listBox.height)
+
+    await altClick(page, rowBox.x + 40, rowBox.y + 6)
+    await expect(palette(page)).toHaveAccessibleName(/^Actions: div div "Row 6"/)
+    await palette(page).getByRole('menuitemcheckbox', { name: 'Move' }).click()
+    for (let i = 0; i < 5; i++) await page.keyboard.press('Shift+ArrowRight')
+    await expect.poll(() => row.evaluate((el) => (el as HTMLElement).style.translate)).toMatch(/^40px( 0px)?$/)
+    await expect(ghost).toHaveCount(1)
+
+    /** The part of the ghost its clip-path leaves, in page px (null: the ghost is hidden). */
+    const visiblePart = () =>
+      ghost.evaluate((g) => {
+        const cs = getComputedStyle(g)
+        if (cs.visibility === 'hidden') return null
+        const r = g.getBoundingClientRect()
+        const v = (cs.clipPath.match(/-?[\d.]+px/g) ?? []).map(parseFloat)
+        const [t = 0, rt = t, b = t, l = rt] = v
+        return { top: r.top + t, bottom: r.bottom - b, left: r.left + l, right: r.right - rt }
+      })
+    const listRect = await list.evaluate((el) => el.getBoundingClientRect().toJSON() as DOMRect)
+
+    // Cut at the list's bottom edge: nothing of it over the content under the list.
+    await expect.poll(async () => (await visiblePart())?.bottom).toBeCloseTo(listRect.bottom, 0)
+    const part = (await visiblePart())!
+    expect(part.top, 'the visible part starts at the row').toBeCloseTo(listRect.bottom - 12, 0)
+    // Scrolled until its old place crosses the list's top edge: cut there too.
+    await list.evaluate((el) => (el.scrollTop = 300))
+    await expect.poll(async () => (await visiblePart())?.top).toBeCloseTo(listRect.top, 0)
+
+    // Scrolled so the row's old place leaves the list: the ghost is gone, not drawn over the page.
+    await list.evaluate((el) => (el.scrollTop = 400))
+    await expect.poll(visiblePart).toBeNull()
+    // Back into view: it shows again.
+    await list.evaluate((el) => (el.scrollTop = 0))
+    await expect.poll(async () => (await visiblePart())?.bottom).toBeCloseTo(listRect.bottom, 0)
+  } finally {
+    await site.close()
+  }
 })
 
 async function resizeBy(page: Page, element: Locator, dx: number, dy: number): Promise<{ w: number; h: number }> {

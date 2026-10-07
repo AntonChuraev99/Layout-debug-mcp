@@ -35,6 +35,8 @@
   --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.28);
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Talk cursor: the ring that lifts its bubble off any page. */
+  --cursor-ring: rgba(255, 255, 255, 0.92);
 
   color-scheme: dark;
 }
@@ -1152,9 +1154,11 @@ kbd {
   /* A drag that starts on a label must not select its text. */
   user-select: none;
 }
+/* Picking: the plain system arrow; the "Select to chat" bubble rides under it
+   (src/ui/TalkCursor.tsx). */
 .overlay--picking {
   pointer-events: auto;
-  cursor: crosshair;
+  cursor: default;
 }
 /* Android: no input channel to the device, a plain click selects. */
 .overlay--click {
@@ -1302,6 +1306,95 @@ kbd {
   pointer-events: none;
   border: 1px dashed #8c8f98;
   background: repeating-linear-gradient(135deg, rgba(140, 143, 152, 0.1) 0 4px, transparent 4px 8px);
+}
+
+/* --- Talk cursor (src/ui/TalkCursor.tsx) --------------------------------------
+   A fixed, zero-size anchor on the hot spot of the system arrow; its transform is written
+   on every move. The bubble's sharp corner sits at (12, 18): just past the lower right of a
+   standard arrow (~12 × 19 px, tail down-left), so it touches neither the arrow nor its tail.
+   Hidden with visibility, not display, so the bubble stays measurable for the edge flips. */
+.tc {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+.tc--off {
+  visibility: hidden;
+}
+.tc__bubble {
+  position: absolute;
+  left: 12px;
+  top: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  max-width: 144px;
+  padding: 0 7px 0 6px;
+  border-radius: 2px 9px 9px 9px;
+  background: var(--ink-strong);
+  color: #fff;
+  font: 500 10px/13px var(--font);
+  white-space: nowrap;
+  box-shadow: 0 0 0 1px var(--cursor-ring), 0 1.5px 5px rgba(0, 0, 0, 0.28);
+  transform-origin: 0 0;
+  transition:
+    opacity 140ms var(--ease-out),
+    transform 140ms var(--ease-out);
+}
+.tc__bubble svg {
+  flex-shrink: 0;
+}
+.tc__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tc--quiet .tc__bubble {
+  opacity: 0;
+  transform: scale(0.7);
+  transition-duration: 100ms;
+  transition-timing-function: var(--ease-std);
+}
+.tc--compact .tc__bubble {
+  gap: 2px;
+  padding: 0 6px;
+}
+.tc__dot {
+  display: block;
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* Flips keep the sharp corner pointing at the hot spot, 4 px off it; the arrow stays. */
+.tc--flip-x .tc__bubble {
+  left: auto;
+  right: 4px;
+  border-radius: 9px 2px 9px 9px;
+  transform-origin: 100% 0;
+}
+.tc--flip-y .tc__bubble {
+  top: auto;
+  bottom: 4px;
+  border-radius: 9px 9px 9px 2px;
+  transform-origin: 0 100%;
+}
+.tc--flip-x.tc--flip-y .tc__bubble {
+  border-radius: 9px 9px 2px 9px;
+  transform-origin: 100% 100%;
+}
+
+/* Android: the moved element as it stood before the move, cut from the device picture. */
+.origin-ghost {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.22;
 }
 
 .mark {
@@ -1574,6 +1667,76 @@ kbd {
   border-radius: 50%;
   background: var(--ink-fg);
   flex-shrink: 0;
+}
+
+/* The chat field, always open under the title: the first thing to reach for. */
+.palette__compose {
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.composer--inline {
+  padding: 6px 6px 6px 10px;
+}
+.composer--inline textarea {
+  max-height: 80px;
+}
+.composer--inline .composer__bar {
+  gap: 6px;
+  margin-top: 4px;
+}
+.pchat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 24px;
+  margin-left: -4px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.pchat > span:not(.count) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pchat:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+.pchat:focus-visible {
+  outline-offset: 0;
+}
+.pchat .count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.pcompose__keys {
+  display: flex;
+  margin-left: auto;
+}
+.pcompose__live,
+.composer--inline:focus-within .pcompose__idle {
+  display: none;
+}
+.composer--inline:focus-within .pcompose__live {
+  display: inline-flex;
+}
+.palette__compose .composer__hint {
+  margin-top: 4px;
+  padding: 0 2px;
+}
+.send[aria-disabled='true'],
+.send[aria-disabled='true']:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--fg-3);
+  cursor: default;
 }
 
 .palette__rows {
@@ -2118,6 +2281,13 @@ dd.facts__wide {
 }
 
 /* --- reduced motion -------------------------------------------------------- */
+
+/* Forced colors: no Talk cursor bubble (TalkCursor also stays off); the system arrow alone. */
+@media (forced-colors: active) {
+  .tc {
+    display: none !important;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *,

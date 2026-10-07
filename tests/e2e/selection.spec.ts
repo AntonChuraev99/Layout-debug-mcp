@@ -1,5 +1,6 @@
 import {
   altClick,
+  CANVAS_NAME,
   centerOf,
   chatDialog,
   clearQueue,
@@ -27,6 +28,105 @@ test.afterAll(async () => {
 })
 test.beforeEach(async () => {
   await clearQueue()
+})
+
+test('2e the Talk cursor bubble follows the arrow while Alt is held, flips at the right edge, and steps aside', async ({ page }) => {
+  await openWindow(page)
+  const tc = page.getByTestId('talk-cursor')
+  const at = async () => {
+    const m = /translate3d\(([-\d.]+)px, ([-\d.]+)px/.exec((await tc.getAttribute('style')) ?? '')
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null
+  }
+  const overlayCursor = () => page.locator('.overlay').evaluate((el) => getComputedStyle(el).cursor)
+  const cta = frameOf(page).getByTestId('cta-continue')
+  const c = await centerOf(cta)
+
+  await expect(tc).toHaveClass(/tc--off/)
+  // The pointer rests on the live page; Alt alone (no move) draws the tip right there:
+  // the inspector reports where the pointer is.
+  // Arrives with a few moves, as a hand does: a single synthetic jump right after load is
+  // occasionally not seen by the page at all, and then there is no resting point to report.
+  await page.mouse.move(c.x - 20, c.y)
+  await page.mouse.move(c.x, c.y, { steps: 5 })
+  await page.keyboard.down('Alt')
+  await expect(tc).not.toHaveClass(/tc--off/)
+  const near = (x: number, y: number) => async () => {
+    const p = await at()
+    return Boolean(p && Math.abs(p.x - x) <= 1 && Math.abs(p.y - y) <= 1)
+  }
+  await expect.poll(near(c.x, c.y), { message: 'tip on the resting pointer' }).toBe(true)
+  await expect(tc).not.toHaveClass(/tc--quiet/)
+  await expect(tc).toContainText('Select to chat')
+  // The standard arrow stays; the bubble only rides under it.
+  expect(await overlayCursor(), 'the system arrow over the frame').toBe('default')
+
+  // It follows the pointer.
+  await page.mouse.move(c.x - 80, c.y - 40)
+  await expect.poll(near(c.x - 80, c.y - 40)).toBe(true)
+
+  // At the stage's right edge the bubble goes to the left of the tip.
+  const canvas = (await page.getByRole('main', { name: CANVAS_NAME }).boundingBox())!
+  await page.mouse.move(canvas.x + canvas.width - 20, c.y)
+  await expect(tc).toHaveClass(/tc--flip-x/)
+  await page.mouse.move(c.x, c.y)
+  await expect(tc).not.toHaveClass(/tc--flip-x/)
+
+  // Alt+click picks: the bubble rests, the tip stays.
+  await page.mouse.down()
+  await page.mouse.up()
+  await expect(palette(page)).toBeVisible()
+  await expect(tc).toHaveClass(/tc--quiet/)
+  await expect(tc).not.toHaveClass(/tc--off/)
+
+  // Over the palette: the system cursor, no follower.
+  const pal = (await palette(page).boundingBox())!
+  await page.mouse.move(pal.x + 40, pal.y + pal.height - 30, { steps: 4 })
+  await expect(tc).toHaveClass(/tc--off/)
+
+  // Alt released: gone, and the overlay lets the page's own cursor through again.
+  await page.mouse.move(c.x, c.y, { steps: 4 })
+  await expect(tc).not.toHaveClass(/tc--off/)
+  await page.keyboard.up('Alt')
+  await expect(tc).toHaveClass(/tc--off/)
+  await expect(page.locator('.overlay--picking')).toHaveCount(0)
+
+  // Dragging the selected element: no follower, even with Alt pressed in the middle.
+  await page.mouse.move(c.x, c.y)
+  await page.mouse.down()
+  await page.mouse.move(c.x + 20, c.y + 10, { steps: 4 })
+  await page.keyboard.down('Alt')
+  await page.mouse.move(c.x + 40, c.y + 20, { steps: 4 })
+  await expect(tc).toHaveClass(/tc--off/)
+  await page.mouse.up()
+  await page.keyboard.up('Alt')
+})
+
+test('2f Alt with the pointer on the palette: no bubble, no hover from the page point it left', async ({ page }) => {
+  await openWindow(page)
+  const tc = page.getByTestId('talk-cursor')
+  const cta = frameOf(page).getByTestId('cta-continue')
+  await selectInFrame(page, cta)
+  const c = await centerOf(cta)
+  const pal = (await palette(page).boundingBox())!
+
+  // Over the page first (the page remembers this point), then onto the palette.
+  await page.mouse.move(c.x - 20, c.y)
+  await page.mouse.move(c.x, c.y, { steps: 5 })
+  await page.mouse.move(pal.x + 40, pal.y + pal.height - 30, { steps: 10 })
+  await page.keyboard.down('Alt')
+  await expect(page.locator('.overlay--picking')).toHaveCount(1)
+  // Give the page's stale answer time to arrive, then: nothing from it.
+  await page.waitForTimeout(500)
+  await expect(tc).toHaveClass(/tc--off/)
+  await expect(hoverBox(page)).toHaveCount(0)
+
+  // Back onto the page: the bubble is at the pointer.
+  const back = { x: c.x - 100, y: c.y - 120 }
+  await page.mouse.move(back.x, back.y, { steps: 10 })
+  await expect(tc).not.toHaveClass(/tc--off/)
+  const m = /translate3d\(([-\d.]+)px, ([-\d.]+)px/.exec((await tc.getAttribute('style')) ?? '')
+  expect(m && Math.abs(Number(m[1]) - back.x) <= 1 && Math.abs(Number(m[2]) - back.y) <= 1, `bubble at the pointer: ${m?.[0]}`).toBe(true)
+  await page.keyboard.up('Alt')
 })
 
 test('2 with Alt, hover highlights the element under the cursor, Alt+click selects it, breadcrumbs go up', async ({ page }) => {
@@ -329,7 +429,7 @@ test('9 Escape closes chat, then details, then the selection', async ({ page }) 
   await details.click()
   await expect(details).toHaveAttribute('aria-expanded', 'true')
 
-  await page.keyboard.press('c')
+  await palette(page).getByRole('button', { name: /^Chat with AI/ }).click()
   await expect(chatDialog(page)).toBeVisible()
   await expect(chatDialog(page).getByRole('textbox', { name: 'Message to the agent' })).toBeFocused()
 

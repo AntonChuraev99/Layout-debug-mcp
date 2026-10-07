@@ -15,7 +15,9 @@ First public release. Install is clone-based (`npm install` + `npm run dev`); on
 - Built-in chat on the Claude Agent SDK and an edit request queue.
 - MCP stdio server with `layout_snapshot`, `selected_element`, `pending_requests`, `reply_in_window`.
 - No modes: the page stays live by default; hold `Alt` (`⌥ Option` on macOS) to highlight a layer, `Alt`+click to select, `Alt`+wheel or a repeated `Alt`+click for the parent. Header pipette for a one-shot pick and an always-visible `Alt` hint; one-time first-run hint. The selected layer is dragged by its body or label and resized by four corner handles; Move / Resize in the palette nudge with the arrow keys. On Android a plain click selects. Keyboard navigation of the tree on the frame (`Enter`, `Shift+Enter`, `Tab`); shortcuts work with non-Latin layouts.
-- Action palette next to the selected element: Chat with AI (`C`), Move, Resize, Hide / Show, Copy anchor, Reset edits, Stop waiting, Details (children and properties).
+- Action palette next to the selected element: an always-open message field (`C` focuses it, `Enter` sends and opens the chat), Chat with AI (thread history), Move, Resize, Hide / Show, Copy anchor, Reset edits, Stop waiting, Details (children and properties).
+- A moved element leaves a faint, non-clickable copy on its old place until the edit is reset (web: a copy in the page outside `<body>`, clipped by scrolling containers; Android: a crop of the frame).
+- While picking (`Alt` or the header pipette) a small "Select to chat" bubble follows the standard arrow cursor; it folds to "•••" once picking is learned and hides over the palette, while dragging and when `Alt` is released.
 - Per-element chat popover with thread history, tied to the element's anchor.
 - Shimmering blur over an element while the agent works, queued and done marks.
 - Automatic frame refresh after the agent replies: waits for HMR, otherwise reloads the page (Android: fresh frame), restores the selection by anchor and re-applies other live edits.

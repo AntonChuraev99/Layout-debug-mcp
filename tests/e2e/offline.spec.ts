@@ -82,7 +82,7 @@ test('14 server down → red pill with the fix; it clears once the server is bac
 
   // Layers still work offline; sending says why it can't, instead of failing silently.
   await selectInFrame(page, frameOf(page).getByTestId('cta-continue'))
-  await palette(page).getByRole('menuitem', { name: /^Chat with AI/ }).click()
+  await palette(page).getByRole('button', { name: /^Chat with AI/ }).click()
   const offlineHint = chatDialog(page).getByText("Server isn't responding, so sending is unavailable")
   await expect(offlineHint).toBeVisible()
   await expect(chatDialog(page).getByRole('button', { name: 'Send' })).toBeDisabled()

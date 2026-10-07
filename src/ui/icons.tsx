@@ -5,7 +5,7 @@
  */
 import type { ReactNode, SVGProps } from 'react'
 
-type P = { size?: number; className?: string }
+type P = { size?: number; className?: string; strokeWidth?: number }
 
 function Icon({ children, size = 16, ...rest }: SVGProps<SVGSVGElement> & { size?: number; children: ReactNode }) {
   return (
