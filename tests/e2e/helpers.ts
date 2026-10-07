@@ -127,6 +127,9 @@ export const chatDialog = (page: Page) => page.getByRole('dialog', { name: /^Cha
 export const addressField = (page: Page) => page.getByRole('textbox', { name: 'Page address' })
 export const selectedBox = (page: Page) => page.locator('.overlay .box--selected')
 export const hoverBox = (page: Page) => page.locator('.overlay .box--hover')
+/** Accessible name of the web frame (the window's `main`). */
+export const CANVAS_NAME = 'Frame. Hold Alt and click to select a layer'
+export const pipetteButton = (page: Page) => page.getByRole('button', { name: 'Pick a layer — or hold Alt' })
 
 /**
  * Opens the window and waits until it shows `target` (default: the server's own
@@ -134,11 +137,22 @@ export const hoverBox = (page: Page) => page.locator('.overlay .box--hover')
  */
 export async function openWindow(
   page: Page,
-  opts: { target?: string; probe?: (n: LayoutNode) => boolean } = {},
+  opts: { target?: string; probe?: (n: LayoutNode) => boolean; coach?: boolean } = {},
 ): Promise<void> {
   const since = Date.now()
+  // The first-run hint covers the top-left of the page; tests that are not about it start
+  // as a returning user (window.spec.ts covers the hint itself).
+  if (!opts.coach) {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem('layout-debug.coachSeen', '1')
+      } catch {
+        // No storage: the hint shows, and a test that needs the corner will say so.
+      }
+    })
+  }
   await page.goto('/')
-  await expect(page.getByRole('main', { name: 'Frame: select a layer' })).toBeVisible()
+  await expect(page.getByRole('main', { name: CANVAS_NAME })).toBeVisible()
   if (opts.target) {
     // The first `ready` seeds the field with the server's target; typing before that gets overwritten.
     await expect(addressField(page)).not.toHaveValue('')
@@ -156,10 +170,22 @@ export async function centerOf(loc: Locator): Promise<{ x: number; y: number; bo
   return { x: box.x + box.width / 2, y: box.y + box.height / 2, box }
 }
 
-/** Clicks the overlay right above an element of the page: the way a user selects it. */
+/** A click with Alt held: the selection gesture (the page itself is live without it). */
+export async function altClick(page: Page, x: number, y: number): Promise<void> {
+  await page.keyboard.down('Alt')
+  try {
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.up()
+  } finally {
+    await page.keyboard.up('Alt')
+  }
+}
+
+/** Alt+clicks right above an element of the page: the way a user selects it. */
 export async function selectInFrame(page: Page, element: Locator): Promise<void> {
   const { x, y } = await centerOf(element)
-  await page.mouse.click(x, y)
+  await altClick(page, x, y)
   await expect(palette(page)).toBeVisible()
 }
 

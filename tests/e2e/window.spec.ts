@@ -1,5 +1,6 @@
 import {
   addressField,
+  CANVAS_NAME,
   centerOf,
   clearQueue,
   DEMO_URL,
@@ -9,6 +10,7 @@ import {
   INSPECTOR_TAG,
   openWindow,
   palette,
+  pipetteButton,
   selectInFrame,
   serveDir,
   test,
@@ -50,8 +52,8 @@ test('1 empty state: no target → open a URL typed without a scheme', async ({ 
   await expect(page.getByRole('heading', { name: 'Open the page you want to edit' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'http://localhost:5173' })).toBeVisible()
   await expect(page.locator('iframe')).toHaveCount(0)
-  // Nothing to inspect yet: the tools say why instead of doing nothing.
-  await expect(page.getByRole('button', { name: 'Move (M)' })).toHaveAttribute('aria-disabled', 'true')
+  // Nothing to inspect yet: the pipette says why instead of doing nothing.
+  await expect(pipetteButton(page)).toHaveAttribute('aria-disabled', 'true')
 
   const typed = DEMO_URL.replace(/^http:\/\//, '')
   await addressField(page).fill(typed)
@@ -63,7 +65,7 @@ test('1 empty state: no target → open a URL typed without a scheme', async ({ 
   await waitForServerSnapshot(since, (n) => n.anchors.testId === 'cta-continue')
   await expect(page.getByText(/^\d+ layers$/)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Open the page you want to edit' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Move (M)' })).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(pipetteButton(page)).not.toHaveAttribute('aria-disabled', 'true')
 })
 
 test('13 language switch EN → RU survives a reload', async ({ page }) => {
@@ -73,14 +75,40 @@ test('13 language switch EN → RU survives a reload', async ({ page }) => {
 
   await lang.getByRole('radio', { name: 'Русский' }).click()
   await expect(page.getByRole('button', { name: 'Открыть', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Выделить (V)' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Выбрать слой — или зажми Alt' })).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('lang', 'ru')
 
   await page.reload()
   await expect(page.getByRole('radiogroup', { name: 'Язык' }).getByRole('radio', { name: 'Русский' })).toHaveAttribute('aria-checked', 'true')
   await expect(page.getByRole('button', { name: 'Открыть', exact: true })).toBeVisible()
-  await expect(page.getByRole('main', { name: 'Кадр: выдели слой' })).toBeVisible()
+  await expect(page.getByRole('main', { name: 'Кадр. Зажми Alt и кликни, чтобы выделить слой' })).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('lang', 'ru')
+})
+
+test('13b the first-run hint shows once: Got it, the first pick or Escape closes it for good', async ({ page }) => {
+  await openWindow(page, { coach: true })
+  const coach = page.getByRole('dialog', { name: 'The page works as usual' })
+  await expect(coach).toBeVisible()
+  await expect(coach).toContainText('hold Alt and click it')
+  // The first pick closes it too.
+  await selectInFrame(page, frameOf(page).getByTestId('cta-continue'))
+  await expect(coach).toHaveCount(0)
+
+  await page.reload()
+  await expect(page.locator('.overlay')).toBeAttached({ timeout: 20_000 })
+  await expect(page.getByText(/^\d+ layers$/)).toBeVisible()
+  await expect(coach).toHaveCount(0)
+})
+
+test('13c the hint folds to its key cap below 1200 px and keeps the full text in the tooltip', async ({ page }) => {
+  await page.setViewportSize({ width: 1199, height: 800 })
+  await openWindow(page)
+  await expect(page.locator('.pick__stack')).toBeHidden()
+  await expect(page.locator('.pick__kap')).toBeVisible()
+  await expect(page.locator('.pick__tip')).toHaveText('Hold Alt: hover to inspect, click to select, scroll for the parent layer')
+  await page.setViewportSize({ width: 1200, height: 800 })
+  await expect(page.locator('.pick__stack')).toBeVisible()
+  await expect(page.locator('.pick__stack')).toContainText('hover to inspect · click to select')
 })
 
 test('15 page without the inspector script → banner names the real server port', async ({ page }) => {
@@ -127,7 +155,7 @@ test('16 data-source-loc becomes the anchor: palette, details and copy show file
 test('17 at 1024 px the palette goes left of a right-edge element and below a full-width one', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 })
   await openWindow(page, { target: `${site.url}/edges.html`, probe: (n) => n.anchors.testId === 'edge' })
-  const canvas = (await page.getByRole('main', { name: 'Frame: select a layer' }).boundingBox())!
+  const canvas = (await page.getByRole('main', { name: CANVAS_NAME }).boundingBox())!
 
   const inside = (b: { x: number; y: number; width: number; height: number }) => {
     expect(b.x).toBeGreaterThanOrEqual(canvas.x)

@@ -21,7 +21,7 @@ import {
   type StyleDigest,
   type UiToInspector,
 } from '../shared/protocol.ts'
-import { forwardedKey, keyTarget, type InspectorKeyMessage } from './keys.ts'
+import { altHeld, forwardedKey, keyTarget, type InspectorKeyMessage } from './keys.ts'
 
 /**
  * Free identifier, left as is by the bundler: the server swaps it for the JSON
@@ -369,19 +369,189 @@ window.addEventListener('message', (event: MessageEvent) => {
       })
       scheduleCapture()
       break
+    case 'wheel':
+      scrollUnder(data.x, data.y, data.dx, data.dy)
+      break
+    case 'nudge':
+      nudgeOn = data.on
+      break
+    case 'selected':
+      selectedNodeId = data.nodeId
+      break
+    case 'pointerQuery':
+      postPointer()
+      break
+    case 'picked':
+      if (altSent) pickedDuringAlt = true
+      break
   }
 })
 
-// Focus stays in the page after a Hand-tool click; give the tool shortcuts back to the
-// window (src/inspector/keys.ts). Bubble phase, so a key the page handled stays the page's.
-// The key is not swallowed: in Hand mode the page is live and may want it too.
-window.addEventListener('keydown', (e: KeyboardEvent) => {
-  const key = forwardedKey(e, keyTarget(e))
-  if (key) post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'key', key })
+/** The layer selected in the window: scrolls that move it make its box stale. */
+let selectedNodeId: NodeId | null = null
+
+/** Where the cursor rests over the page; null once it left the page. */
+let lastPointer: { x: number; y: number } | null = null
+function postPointer() {
+  if (lastPointer) post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'pointer', x: lastPointer.x, y: lastPointer.y })
+}
+document.documentElement.addEventListener('pointerleave', () => {
+  lastPointer = null
 })
 
+// --- keys and the selection modifier ------------------------------------------
+
+/** The window's nudge row is on: arrows pressed here move or size the selected layer. */
+let nudgeOn = false
+
+// The page is live, so focus often sits in it; give the window its keys back
+// (src/inspector/keys.ts). Bubble phase, so a key the page handled stays the page's.
+// Escape is not swallowed — the page may close its own modal with it. Arrows are, while
+// the nudge row is on: they would scroll the page under the element being nudged.
+window.addEventListener('keydown', (e: KeyboardEvent) => {
+  const key = forwardedKey(e, keyTarget(e), { arrows: nudgeOn })
+  if (!key) return
+  if (key.startsWith('Arrow')) e.preventDefault()
+  post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'key', key, shift: key.startsWith('Arrow') ? e.shiftKey : undefined })
+})
+
+/**
+ * Alt state as last reported to the window. The window cannot see keys while focus is
+ * here, so every change goes out — from key events and, as a resync, from the `altKey`
+ * of any pointer or wheel event (a keyup lost to Alt+Tab must not leave Alt stuck).
+ */
+let altSent = false
+/** An Alt pick happened during this press: its keyup must not reach the browser menu. */
+let pickedDuringAlt = false
+
+function reportAlt(down: boolean, blur = false) {
+  if (down === altSent && !blur) return
+  altSent = down
+  post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'alt', down, blur: blur || undefined })
+  // Alt pressed with the cursor resting here: the window highlights at once, not on the next move.
+  if (down) postPointer()
+}
+
+window.addEventListener(
+  'keydown',
+  (e: KeyboardEvent) => {
+    if (e.key === 'Alt' || e.key === 'AltGraph' || e.altKey) reportAlt(altHeld(e))
+  },
+  true,
+)
+window.addEventListener(
+  'keyup',
+  (e: KeyboardEvent) => {
+    if (e.key === 'Alt' && pickedDuringAlt) {
+      // Chrome on Windows focuses its menu on a bare Alt release; after a pick this release
+      // is not bare. Whether preventDefault keeps the menu away is browser-dependent.
+      e.preventDefault()
+    }
+    if (e.key === 'Alt' || e.key === 'AltGraph') pickedDuringAlt = false
+    reportAlt(altHeld(e))
+  },
+  true,
+)
+window.addEventListener('blur', () => {
+  if (altSent) reportAlt(false, true)
+})
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && altSent) reportAlt(false, true)
+})
+
+window.addEventListener(
+  'pointermove',
+  (e: PointerEvent) => {
+    lastPointer = { x: e.clientX, y: e.clientY }
+    reportAlt(altHeld(e))
+  },
+  { capture: true, passive: true },
+)
+
+/**
+ * Alt+click is the window's, never the page's: in Chrome Alt+click on a link downloads it
+ * (Option+click on macOS too). The Alt signal reaches the window asynchronously, so the
+ * first click can land here before the overlay takes the mouse: swallow the whole click
+ * sequence in the capture phase and hand the press over as a pick.
+ */
+function swallowAltClick(e: MouseEvent) {
+  if (!altHeld(e)) return
+  e.preventDefault()
+  e.stopImmediatePropagation()
+  reportAlt(true)
+  if (e.type === 'pointerdown' && e.button === 0) {
+    pickedDuringAlt = true
+    post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'altPick', x: e.clientX, y: e.clientY })
+  }
+}
+for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'auxclick', 'dblclick', 'contextmenu']) {
+  window.addEventListener(type, swallowAltClick as EventListener, true)
+}
+
+// Alt+wheel walks layers in the window; here it must neither scroll the page nor go
+// through history (Firefox). Non-passive, so preventDefault holds.
+window.addEventListener(
+  'wheel',
+  (e: WheelEvent) => {
+    if (!altHeld(e)) return
+    e.preventDefault()
+    reportAlt(true)
+  },
+  { capture: true, passive: false },
+)
+
+/**
+ * The window's overlay caught a wheel over the selected layer (its body takes the mouse
+ * for dragging). Scroll what the user would have scrolled: the nearest scrollable
+ * ancestor of the point, else the document.
+ */
+function scrollUnder(x: number, y: number, dx: number, dy: number) {
+  let el: Element | null = document.elementFromPoint(x, y)
+  while (el && el !== document.documentElement && el !== document.body) {
+    const cs = getComputedStyle(el)
+    const canY = /(auto|scroll|overlay)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight
+    const canX = /(auto|scroll|overlay)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth
+    if ((dy && canY) || (dx && canX)) {
+      el.scrollBy({ left: dx, top: dy, behavior: 'instant' })
+      return
+    }
+    el = el.parentElement
+  }
+  window.scrollBy({ left: dx, top: dy, behavior: 'instant' })
+}
+
+// --- scroll -------------------------------------------------------------------
+
+/**
+ * Boxes are viewport-relative, so a scroll that moves the selected element makes its box
+ * stale until the next snapshot. The window hides the selection while this goes on (one
+ * message per frame at most) and shows it again once the fresh snapshot is in. Other
+ * scrolls (a carousel, a ticker) only refresh the tree: hiding on those would keep the
+ * palette away for as long as the page animates.
+ */
+function movesSelection(target: EventTarget | null): boolean {
+  if (!selectedNodeId) return false
+  if (target === document || target === document.documentElement || target === document.body) return true
+  const el = elementsById.get(selectedNodeId)
+  return Boolean(el && target instanceof Node && target.contains(el))
+}
+
+// A clock, not requestAnimationFrame: a hidden tab never runs rAF, and the gate would stay shut.
+let scrollPostedAt = 0
+window.addEventListener(
+  'scroll',
+  (e: Event) => {
+    const now = performance.now()
+    if (movesSelection(e.target) && now - scrollPostedAt >= 16) {
+      scrollPostedAt = now
+      post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'scrolling' })
+    }
+    scheduleCapture(100)
+  },
+  { passive: true, capture: true },
+)
+
 window.addEventListener('resize', () => scheduleCapture())
-window.addEventListener('scroll', () => scheduleCapture(200), { passive: true, capture: true })
 
 // The app re-renders on its own (hot reload, state changes) — keep the tree fresh,
 // but never faster than the debounce or we drown the parent frame.

@@ -134,12 +134,37 @@ export type InspectorToUi =
   | { tag: typeof PROTOCOL_TAG; from: 'inspector'; t: 'hello'; version: number; url: string }
   | { tag: typeof PROTOCOL_TAG; from: 'inspector'; t: 'snapshot'; snapshot: Snapshot }
   | { tag: typeof PROTOCOL_TAG; from: 'inspector'; t: 'error'; message: string }
+  /**
+   * The selection modifier changed while the page has focus (the window sees no keys
+   * then). `blur`: the page lost focus — the window drops Alt unless focus came to it.
+   */
+  | { tag: typeof PROTOCOL_TAG; from: 'inspector'; t: 'alt'; down: boolean; blur?: boolean }
+  /**
+   * An Alt+click reached the page before the window knew Alt was down. The inspector
+   * swallowed it (Alt+click on a link downloads it) and hands it over as a pick.
+   * Viewport css-px of the page, the overlay's own space on web.
+   */
+  | { tag: typeof PROTOCOL_TAG; from: 'inspector'; t: 'altPick'; x: number; y: number }
+  /** The page is scrolling the selected element: its box is stale until the next snapshot. */
+  | { tag: typeof PROTOCOL_TAG; from: 'inspector'; t: 'scrolling' }
+  /** Answer to `pointerQuery`: where the cursor rests over the page (viewport css-px). */
+  | { tag: typeof PROTOCOL_TAG; from: 'inspector'; t: 'pointer'; x: number; y: number }
 
 export type UiToInspector =
   | { tag: typeof PROTOCOL_TAG; from: 'ui'; t: 'capture' }
   | { tag: typeof PROTOCOL_TAG; from: 'ui'; t: 'setOverride'; override: Override }
   | { tag: typeof PROTOCOL_TAG; from: 'ui'; t: 'clearOverride'; nodeId: NodeId }
   | { tag: typeof PROTOCOL_TAG; from: 'ui'; t: 'clearAllOverrides' }
+  /** A wheel over the selected layer's body, which the overlay caught: scroll the page under it. */
+  | { tag: typeof PROTOCOL_TAG; from: 'ui'; t: 'wheel'; x: number; y: number; dx: number; dy: number }
+  /** The palette's nudge row is on: arrows pressed in the page go to the window. */
+  | { tag: typeof PROTOCOL_TAG; from: 'ui'; t: 'nudge'; on: boolean }
+  /** The selected layer: only scrolls that move it hide the window's boxes. */
+  | { tag: typeof PROTOCOL_TAG; from: 'ui'; t: 'selected'; nodeId: NodeId | null }
+  /** Alt went down in the window: say where the cursor rests over the page, if it does. */
+  | { tag: typeof PROTOCOL_TAG; from: 'ui'; t: 'pointerQuery' }
+  /** The window made a pick during this Alt press: its keyup is not a bare Alt tap. */
+  | { tag: typeof PROTOCOL_TAG; from: 'ui'; t: 'picked' }
 
 // ---------------------------------------------------------------------------
 // UI <-> server (WebSocket)

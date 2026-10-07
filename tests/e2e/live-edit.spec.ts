@@ -18,12 +18,10 @@ test.beforeEach(async () => {
   await clearQueue()
 })
 
-test('4 dragging with Move shifts the real element in the page and the label shows Δ', async ({ page }) => {
+test('4 dragging the selected body shifts the real element in the page and the label shows Δ', async ({ page }) => {
   await openWindow(page)
-  await page.keyboard.press('m')
-  await expect(page.getByRole('button', { name: 'Move (M)' })).toHaveAttribute('aria-pressed', 'true')
-
   const cta = frameOf(page).getByTestId('cta-continue')
+  await selectInFrame(page, cta)
   const c = await centerOf(cta)
   await page.mouse.move(c.x, c.y)
   await page.mouse.down()
@@ -44,8 +42,8 @@ test('4b a moved element keeps its selection box when the page re-renders', asyn
   // The app changes on its own while the user plays (state change, hot reload): the
   // inspector recaptures, and the box must still sit on the moved element, not drift.
   await openWindow(page)
-  await page.keyboard.press('m')
   const cta = frameOf(page).getByTestId('cta-continue')
+  await selectInFrame(page, cta)
   const c = await centerOf(cta)
   await page.mouse.move(c.x, c.y)
   await page.mouse.down()
@@ -67,13 +65,9 @@ async function resizeBy(page: Page, element: Locator, dx: number, dy: number): P
   await selectInFrame(page, element)
   const before = (await centerOf(element)).box
 
-  const resize = palette(page).getByRole('menuitemcheckbox', { name: 'Resize' })
-  await expect(resize).toHaveAttribute('aria-checked', 'false')
-  await expect(page.locator('.overlay [data-handle="resize"]')).toHaveCount(0)
-  await resize.click()
-  await expect(resize).toHaveAttribute('aria-checked', 'true')
-
-  const handle = await centerOf(page.locator('.overlay [data-handle="resize"]'))
+  // No mode to switch on: the selected layer has its corner handles right away.
+  await expect(page.locator('.overlay [data-handle]')).toHaveCount(4)
+  const handle = await centerOf(page.locator('.overlay [data-handle="br"]'))
   const w = Math.round(before.width + dx)
   const h = Math.round(before.height + dy)
   await page.mouse.move(handle.x, handle.y)
@@ -118,6 +112,58 @@ test('5b resizing a flex: 1 item changes its real width, not only the overlay bo
   const after = (await cta.boundingBox())!
   expect(Math.abs(after.height - h), 'real height follows the handle').toBeLessThanOrEqual(1)
   expect(Math.abs(after.width - w), 'real width follows the handle (overlay shows the new width)').toBeLessThanOrEqual(1)
+})
+
+test('5d the top-left handle sizes from its own corner: the bottom-right one stays put', async ({ page }) => {
+  await openWindow(page)
+  const title = frameOf(page).getByRole('heading', { name: 'Годовая подписка' })
+  await selectInFrame(page, title)
+  const before = (await centerOf(title)).box
+  const tl = await centerOf(page.locator('.overlay [data-handle="tl"]'))
+  await page.mouse.move(tl.x, tl.y)
+  await page.mouse.down()
+  await page.mouse.move(tl.x - 20, tl.y - 6, { steps: 5 })
+  await page.mouse.up()
+  await expect
+    .poll(() => title.evaluate((el) => [(el as HTMLElement).style.width, (el as HTMLElement).style.height, (el as HTMLElement).style.translate]))
+    .toEqual([`${Math.round(before.width + 20)}px`, `${Math.round(before.height + 6)}px`, '-20px -6px'])
+  const after = (await title.boundingBox())!
+  expect(Math.abs(after.x + after.width - (before.x + before.width)), 'right edge stays').toBeLessThanOrEqual(1)
+  expect(Math.abs(after.y + after.height - (before.y + before.height)), 'bottom edge stays').toBeLessThanOrEqual(1)
+})
+
+test('5e Move and Resize rows switch on arrow-key nudging: 1 px, 8 with Shift; Enter leaves it', async ({ page }) => {
+  await openWindow(page)
+  const cta = frameOf(page).getByTestId('cta-continue')
+  await selectInFrame(page, cta)
+  const p = palette(page)
+  const move = p.getByRole('menuitemcheckbox', { name: 'Move' })
+  const resize = p.getByRole('menuitemcheckbox', { name: 'Resize' })
+
+  await move.click()
+  await expect(move).toHaveAttribute('aria-checked', 'true')
+  await expect(p.getByRole('button', { name: 'Move left by 1 px' })).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('Shift+ArrowDown')
+  await expect.poll(() => cta.evaluate((el) => (el as HTMLElement).style.translate)).toBe('1px 8px')
+  // The on-screen arrows do the same for a pointer.
+  await p.getByRole('button', { name: 'Move left by 1 px' }).click()
+  await expect.poll(() => cta.evaluate((el) => (el as HTMLElement).style.translate)).toBe('0px 8px')
+
+  // One row at a time: Resize turns Move off.
+  await resize.click()
+  await expect(resize).toHaveAttribute('aria-checked', 'true')
+  await expect(move).toHaveAttribute('aria-checked', 'false')
+  const w = Math.round((await cta.boundingBox())!.width)
+  await page.keyboard.press('ArrowLeft')
+  await expect.poll(() => cta.evaluate((el) => (el as HTMLElement).style.width)).toBe(`${w - 1}px`)
+
+  await page.keyboard.press('Enter')
+  await expect(resize).toHaveAttribute('aria-checked', 'false')
+  await expect(resize).toBeFocused()
+  // Off again: arrows walk the rows instead of sizing the element.
+  await page.keyboard.press('ArrowDown')
+  await expect.poll(() => cta.evaluate((el) => (el as HTMLElement).style.width)).toBe(`${w - 1}px`)
 })
 
 test('6 Hide makes the element invisible in the page, Show brings it back', async ({ page }) => {

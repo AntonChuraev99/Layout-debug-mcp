@@ -43,21 +43,21 @@ export function placePopover(
 }
 
 export interface LabelPlacement {
-  vertical: 'above' | 'below'
+  vertical: 'above' | 'below' | 'inside'
   align: 'left' | 'right'
 }
 
-/** Room a label above its box needs: 20px chip + 4px gap + 2px slack. */
-const LABEL_ROOM = 26
-
 /**
- * A box label sits above the box on the left. Too close to the top edge it goes below
- * (never inside — it would cover what is being measured); past the right edge it
- * aligns to the box's right side instead. `box` is in canvas pixels.
+ * A box label sits above the box on the left. Too close to the top edge it goes below;
+ * a box that is also taller than three labels (body, a full-screen Scaffold) would push a
+ * label below off the useful part of the frame, so it goes inside, in the top corner.
+ * Past the right edge the label aligns to the box's right side instead. `box` is in
+ * canvas pixels; the room above is the label, a 4px gap and 2px slack.
  */
-export function placeLabel(box: Rect, labelWidth: number, canvasWidth: number): LabelPlacement {
+export function placeLabel(box: Rect, labelWidth: number, canvasWidth: number, labelHeight = 20): LabelPlacement {
+  const room = labelHeight + 6
   return {
-    vertical: box.y < LABEL_ROOM ? 'below' : 'above',
+    vertical: box.y >= room ? 'above' : box.h > labelHeight * 3 ? 'inside' : 'below',
     align: box.x - 1.5 + labelWidth > canvasWidth - 4 ? 'right' : 'left',
   }
 }

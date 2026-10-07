@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: Alt+click on a link</title>
+    <style>
+      body { margin: 0; padding: 48px; font: 16px/1.4 system-ui, sans-serif; background: #f4f5f7; }
+      .row { display: flex; gap: 16px; align-items: center; }
+    </style>
+  </head>
+  <body>
+    <main class="row">
+      <!-- In Chrome, Alt+click on a link downloads it: the window's Alt+click must never reach it. -->
+      <a data-testid="dl" href="data:text/plain,layout-debug" download="should-not-download.txt">Download me</a>
+      <input data-testid="field" aria-label="Field" />
+    </main>
+    <!-- Scrolls on its own like a news ticker: it must not hide the window's palette. -->
+    <div data-testid="ticker" style="margin-top: 200px; width: 240px; overflow-x: auto; white-space: nowrap">
+      One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen
+    </div>
+    __INSPECTOR__
+  </body>
+</html>

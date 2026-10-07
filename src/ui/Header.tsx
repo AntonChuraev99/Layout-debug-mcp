@@ -1,8 +1,7 @@
-import { useRef, type KeyboardEvent, type ReactNode } from 'react'
-import type { Tool } from './Overlay.tsx'
-import { LOCALE_NAMES, LOCALES, useT, type MsgKey } from './i18n.ts'
+import { useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { LOCALE_NAMES, LOCALES, useT, type Translate } from './i18n.ts'
 import { Popover } from './Popover.tsx'
-import { BrandGlyph, IconGlobe, IconHand, IconInbox, IconMove, IconPointer, IconSmartphone } from './icons.tsx'
+import { BrandGlyph, IconGlobe, IconInbox, IconPipette, IconSmartphone } from './icons.tsx'
 
 export interface StatusInfo {
   tone: 'danger' | 'warn' | 'busy'
@@ -14,13 +13,26 @@ export interface StatusInfo {
   onClick?: () => void
 }
 
+export interface PickInfo {
+  /** The pipette is on: one pick, then back to the live page. */
+  pipette: boolean
+  /** Alt reached the window: the hint lights up (it doubles as proof the key got here). */
+  alt: boolean
+  /** Null when picking works; otherwise why not (nothing to inspect yet). */
+  blocked: string | null
+  /** The user has learned the gesture: the hint folds to its key cap. */
+  compact: boolean
+  /** The key cap says ⌥ Option. */
+  mac: boolean
+  onPipette: () => void
+}
+
 interface Props {
-  tool: Tool
-  onTool: (tool: Tool) => void
-  /** Null when tools work; otherwise why none do (nothing to inspect yet). */
-  toolsBlocked: string | null
-  /** Why the move tool specifically is off (Android without the server). */
-  moveBlocked: string | null
+  pick: PickInfo
+  /** The first-run hint under the pick group, once per browser (web only). */
+  coach: { onClose: () => void } | null
+  /** `t` with `{alt}` filled for this platform. */
+  t: Translate
   target: 'web' | 'android'
   urlDraft: string
   onUrlDraft: (v: string) => void
@@ -37,26 +49,11 @@ interface Props {
   loading: boolean
 }
 
-const TOOLS: Array<{ id: Tool; label: MsgKey; key: string; icon: ReactNode }> = [
-  { id: 'select', label: 'tool.select', key: 'V', icon: <IconPointer /> },
-  { id: 'move', label: 'tool.move', key: 'M', icon: <IconMove /> },
-  { id: 'hand', label: 'tool.hand', key: 'H', icon: <IconHand /> },
-]
-
 export function Header(p: Props) {
-  const { t } = useT()
-  const toolRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const { t } = p
   const inboxRef = useRef<HTMLButtonElement | null>(null)
   const statusRef = useRef<HTMLButtonElement | null>(null)
-
-  // Roving tabindex: the group is one Tab stop, arrows walk inside it.
-  const onToolsKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-    e.preventDefault()
-    const at = toolRefs.current.findIndex((el) => el === document.activeElement)
-    const next = (at + (e.key === 'ArrowRight' ? 1 : TOOLS.length - 1)) % TOOLS.length
-    toolRefs.current[next]?.focus()
-  }
+  const web = p.target === 'web'
 
   return (
     <header className="tb">
@@ -64,37 +61,9 @@ export function Header(p: Props) {
         <BrandGlyph />
         <span className="tb__brand-text">layout-debug</span>
       </div>
-      <span className="tb__sep" aria-hidden="true" />
+      <span className={`tb__sep${web ? '' : ' tb__sep--pick'}`} aria-hidden="true" />
 
-      <div className="tools" role="toolbar" aria-label={t('tools.label')} onKeyDown={onToolsKey}>
-        {TOOLS.map((tool, i) => {
-          const blocked = p.toolsBlocked ?? (tool.id === 'move' ? p.moveBlocked : null)
-          const label = t(tool.label)
-          return (
-            <span key={tool.id} className="tipwrap">
-              <button
-                ref={(el) => {
-                  toolRefs.current[i] = el
-                }}
-                type="button"
-                className="tool"
-                aria-pressed={p.tool === tool.id}
-                aria-label={`${label} (${tool.key})`}
-                aria-disabled={blocked ? true : undefined}
-                tabIndex={p.tool === tool.id ? 0 : -1}
-                onClick={() => {
-                  if (!blocked) p.onTool(tool.id)
-                }}
-              >
-                {tool.icon}
-              </button>
-              <span className="tip" role="tooltip">
-                {blocked ? blocked : label} {!blocked && <kbd>{tool.key}</kbd>}
-              </span>
-            </span>
-          )
-        })}
-      </div>
+      <PickGroup pick={p.pick} web={web} t={t} coach={p.coach} />
       <span className="tb__sep" aria-hidden="true" />
 
       {p.target === 'web' ? (
@@ -189,6 +158,91 @@ export function Header(p: Props) {
       <LanguageSwitch />
       {p.loading && <span className="tb__progress" aria-hidden="true" />}
     </header>
+  )
+}
+
+/**
+ * Pipette + the always-on hint "Alt · hover to inspect · click to select" (DESIGN_SPEC §6).
+ * Every text the hint can show sits stacked in one grid cell, so switching states never
+ * changes its width and never moves the address bar. Below 1200 px (or once the gesture
+ * is learned) it folds to the key cap; the full text stays in the tooltip and in the
+ * pipette's description. Android: no pipette and no cap — a plain click selects there.
+ */
+function PickGroup({ pick, web, t, coach }: { pick: PickInfo; web: boolean; t: Translate; coach: Props['coach'] }) {
+  const descId = useId()
+  const blocked = Boolean(pick.blocked)
+  const state = pick.pipette ? ' is-pipette' : pick.alt ? ' is-alt' : ''
+  // Android has no cap to fold to: compact there would leave an empty frame.
+  const cls = `pick${pick.compact && web ? ' pick--compact' : ''}${web ? '' : ' pick--android'}${blocked ? ' is-blocked' : ''}${state}`
+  const description = web ? t('pick.kapTitle') : t('pick.kapTitleAndroid')
+
+  return (
+    <div className="pick-anchor">
+      <div className={cls}>
+        {web && (
+          <span className="tipwrap">
+            <button
+              type="button"
+              className="tool"
+              aria-pressed={pick.pipette}
+              aria-label={t('pick.button')}
+              aria-describedby={descId}
+              aria-disabled={blocked ? true : undefined}
+              onClick={() => {
+                if (!blocked) pick.onPipette()
+              }}
+            >
+              <IconPipette />
+            </button>
+            <span className="tip" role="tooltip">
+              {pick.blocked ?? t('pick.button')}
+            </span>
+          </span>
+        )}
+        <span className="tipwrap pick__wrap">
+          <span className="pick__hint" aria-describedby={web ? undefined : descId}>
+            {web && (
+              <kbd className="pick__kap" aria-hidden="true">
+                <span className={pick.pipette ? 'is-off' : ''}>
+                  <span className="pick__kap-full">{pick.mac ? '⌥ Option' : 'Alt'}</span>
+                  <span className="pick__kap-short">{pick.mac ? '⌥' : 'Alt'}</span>
+                </span>
+                <span className={pick.pipette ? '' : 'is-off'}>Esc</span>
+              </kbd>
+            )}
+            <span className="pick__stack">
+              <span className={pick.pipette ? 'is-off' : ''}>{t('pick.hint')}</span>
+              {web && <span className={pick.pipette ? '' : 'is-off'}>{t('pick.hintPipette')}</span>}
+            </span>
+          </span>
+          {web && (
+            <span className="tip pick__tip" role="tooltip">
+              {description}
+            </span>
+          )}
+        </span>
+        <span id={descId} hidden>
+          {description}
+        </span>
+      </div>
+      {coach && web && <Coach t={t} onClose={coach.onClose} />}
+    </div>
+  )
+}
+
+/** First-run hint: the page is live now, clicks no longer select. Shown once per browser. */
+function Coach({ t, onClose }: { t: Translate; onClose: () => void }) {
+  const titleId = useId()
+  return (
+    <div className="coach" role="dialog" aria-modal="false" aria-labelledby={titleId}>
+      <h2 className="coach__title" id={titleId}>
+        {t('coach.title')}
+      </h2>
+      <p className="coach__text">{t('coach.text')}</p>
+      <button type="button" className="btn coach__ok" onClick={onClose}>
+        {t('coach.ok')}
+      </button>
+    </div>
   )
 }
 

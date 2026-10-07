@@ -268,8 +268,15 @@ kbd {
   }
 }
 
-.tools {
+/* Pick group: pipette + the always-on "Alt · hover to inspect · click to select" hint. */
+.pick-anchor {
+  position: relative;
   display: flex;
+  flex-shrink: 0;
+}
+.pick {
+  display: flex;
+  align-items: center;
   gap: 2px;
   padding: 2px;
   background: var(--surface-0);
@@ -277,6 +284,135 @@ kbd {
   border-radius: var(--r-md);
   flex-shrink: 0;
 }
+.pick__hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px 0 7px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  transition: background-color 80ms linear, color 80ms linear, box-shadow 80ms linear;
+}
+/* Every text sits in one grid cell; the hidden ones keep the width (no jump of the URL bar). */
+.pick__stack,
+.pick__kap > span {
+  display: grid;
+}
+.pick__stack > *,
+.pick__kap > * {
+  grid-area: 1 / 1;
+}
+.pick__stack > .is-off,
+.pick__kap > .is-off {
+  visibility: hidden;
+}
+.pick__kap {
+  display: inline-grid;
+  justify-items: center;
+  height: 20px;
+  min-width: 30px;
+  padding: 0 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  /* 2px bottom edge: a key cap, not a tag. No token for it (kbd uses 1px). */
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 11px;
+  transition: background-color 80ms linear, border-color 80ms linear, color 80ms linear;
+}
+.pick__kap-short {
+  display: none;
+}
+.pick__tip {
+  display: none !important;
+}
+.pick.is-alt .pick__hint {
+  background: var(--ink-soft);
+  box-shadow: inset 0 0 0 1px rgba(224, 57, 143, 0.38);
+  color: var(--ink-fg);
+}
+.pick.is-alt .pick__kap {
+  background: var(--ink-strong);
+  border-color: var(--ink);
+  color: #fff;
+}
+.pick.is-blocked .pick__hint {
+  opacity: 0.55;
+}
+.pick--android .pick__hint {
+  padding: 0 10px;
+}
+/* Folded to the key cap: learned (3 Alt picks, from the next load) or a narrow window. */
+.pick--compact .pick__stack {
+  display: none;
+}
+.pick--compact .pick__hint {
+  padding: 0 5px;
+}
+.pick--compact .pick__tip {
+  display: inline-flex !important;
+}
+.pick--compact .pick__kap-full {
+  display: none;
+}
+.pick--compact .pick__kap-short {
+  display: inline;
+}
+/* Folded, a held Alt lights the cap only: the hint must not grow and push the URL bar. */
+.pick--compact.is-alt .pick__hint {
+  background: none;
+  box-shadow: none;
+}
+
+.coach {
+  position: absolute;
+  top: calc(100% + 11px);
+  left: -4px;
+  width: 300px;
+  padding: 12px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-float);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 30;
+  animation: float-in-down 160ms var(--ease-out);
+}
+.coach::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 22px;
+  width: 10px;
+  height: 10px;
+  background: var(--surface-1);
+  border-left: 1px solid var(--line-strong);
+  border-top: 1px solid var(--line-strong);
+  transform: rotate(45deg);
+}
+.coach__title {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+.coach__text {
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--fg-2);
+}
+.coach__ok {
+  align-self: flex-end;
+  margin-top: 8px;
+}
+
 .tool {
   display: grid;
   place-items: center;
@@ -998,17 +1134,43 @@ kbd {
 
 /* --- overlay --------------------------------------------------------------- */
 
+/* Selection edge: the frame belongs to the overlay while Alt is held or the pipette is on. */
+.canvas--picking::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 2px var(--ink);
+  z-index: 12;
+  pointer-events: none;
+}
+
+/* Live page by default: the overlay lets the mouse through except where the selection grabs it. */
 .overlay {
   position: absolute;
-  cursor: crosshair;
   touch-action: none;
-}
-.overlay--move,
-.overlay--can-move {
-  cursor: move;
-}
-.overlay--hand {
   pointer-events: none;
+  /* A drag that starts on a label must not select its text. */
+  user-select: none;
+}
+.overlay--picking {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+/* Android: no input channel to the device, a plain click selects. */
+.overlay--click {
+  pointer-events: auto;
+  cursor: default;
+}
+.overlay--dragging {
+  pointer-events: auto;
+}
+.overlay--stale > * {
+  opacity: 0;
+}
+/* An invisible box must not grab: a click on its old place belongs to the page. */
+.overlay--stale,
+.overlay--stale * {
+  pointer-events: none !important;
 }
 
 .box {
@@ -1022,6 +1184,16 @@ kbd {
 }
 .box--selected {
   box-shadow: 0 0 0 1.5px var(--ink), 0 0 0 2.5px var(--halo);
+}
+/* The selected body is a drag handle: it says so with the move cursor and a wash on hover. */
+.box--grab {
+  pointer-events: auto;
+  cursor: move;
+  transition: background-color 80ms linear;
+}
+.box--grab:hover,
+.box--grab.is-dragging {
+  background: var(--ink-wash);
 }
 
 .chip {
@@ -1047,8 +1219,39 @@ kbd {
   opacity: 0.8;
 }
 .chip--selected {
+  height: 24px;
+  padding: 0 7px;
   background: var(--ink-strong);
   color: #fff;
+}
+.chip--grip {
+  gap: 5px;
+  padding: 0 7px 0 4px;
+  transition: background-color 80ms linear;
+}
+.chip--grip[data-grab] {
+  pointer-events: auto;
+  cursor: move;
+}
+.chip--grip[data-grab]:hover {
+  background: var(--ink);
+}
+.chip .grip {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+/* The hover was raised by the wheel: it shows a parent, not the tightest layer. */
+.chip__lvl {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-xs);
+  background: var(--ink-strong);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 .chip--hover {
   background: rgba(33, 34, 39, 0.92);
@@ -1068,16 +1271,22 @@ kbd {
   font-weight: 500;
 }
 
+/* Corner handles, placed by Overlay (pick.ts handleOrigin): 24px targets, 9px dots. */
 .handle {
   position: absolute;
-  right: -12px;
-  bottom: -12px;
   width: 24px;
   height: 24px;
   display: grid;
   place-items: center;
   pointer-events: auto;
+}
+.handle--tl,
+.handle--br {
   cursor: nwse-resize;
+}
+.handle--tr,
+.handle--bl {
+  cursor: nesw-resize;
 }
 .handle__dot {
   width: 9px;
@@ -1177,6 +1386,13 @@ kbd {
   pointer-events: none;
   z-index: 10;
 }
+/* The page is scrolling: the card points at a box that is stale, so it steps aside until the fresh one. */
+.float--stale {
+  opacity: 0;
+}
+.float--stale .float__card {
+  pointer-events: none;
+}
 .float__card {
   position: absolute;
   pointer-events: auto;
@@ -1252,7 +1468,22 @@ kbd {
   min-height: 0;
 }
 .palette {
+  position: relative;
   width: 240px;
+}
+.palette__close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+}
+/* The deselect ✕ sits over the first line: it keeps clear of the crumbs or the title. */
+.palette .crumbs,
+.palette__body > .palette__head:first-child {
+  padding-right: 34px;
+}
+.palette__body > .palette__head:first-child {
+  padding-top: 10px;
 }
 .palette--wide {
   width: 304px;
@@ -1410,6 +1641,24 @@ kbd {
 .prow--warn .prow__icon {
   color: var(--warn);
 }
+/* Arrow-key row under Move / Resize: on-screen arrows for a pointer, the keys for a keyboard. */
+.nudge {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 6px 34px;
+}
+.nudge__btn {
+  border: 1px solid var(--line);
+}
+.nudge__shift {
+  margin-left: 6px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+
 .count {
   min-width: 18px;
   height: 18px;
@@ -1816,6 +2065,34 @@ dd.facts__wide {
 }
 
 /* --- widths ---------------------------------------------------------------- */
+
+/* Below 1200 the pick hint folds to its key cap (web); on Android, with no cap, it goes
+   altogether and the canvas label keeps the instruction. */
+@media (max-width: 1199px) {
+  .pick .pick__stack {
+    display: none;
+  }
+  .pick .pick__hint {
+    padding: 0 5px;
+  }
+  .pick .pick__tip {
+    display: inline-flex !important;
+  }
+  .pick .pick__kap-full {
+    display: none;
+  }
+  .pick .pick__kap-short {
+    display: inline;
+  }
+  .pick.is-alt .pick__hint {
+    background: none;
+    box-shadow: none;
+  }
+  .pick-anchor:has(.pick--android),
+  .tb__sep--pick {
+    display: none;
+  }
+}
 
 @media (max-width: 1099px) {
   .tb__brand-text {
