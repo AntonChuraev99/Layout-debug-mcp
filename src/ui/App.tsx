@@ -3,15 +3,15 @@ import type { ChatMessage, EditRequest, ErrorCode, LayoutNode, NodeId, Override,
 import { ActionPalette } from './ActionPalette.tsx'
 import { Blank, CopyBlock } from './Blank.tsx'
 import { ChatPopover, type LocalMessage } from './ChatPopover.tsx'
-import { placePopover, union, type Side } from './geometry.ts'
+import { frameCropRect, placePopover, union, type Side } from './geometry.ts'
 import { androidStateFor, rejectsSubmit, resolveRequestErrors, type AndroidState } from './errors.ts'
 import { Header, type StatusInfo } from './Header.tsx'
 import { useT, type MsgKey } from './i18n.ts'
 import { IconGlobe, IconPlug, IconRefresh, IconSmartphone, IconX } from './icons.tsx'
 import { Inbox, type InboxItem, type LooseEntry } from './Inbox.tsx'
 import { describeOverride } from './NodeDetails.tsx'
-import { effectiveRect, Overlay, type Mark, type OverlayApi, type PickSource } from './Overlay.tsx'
-import { COMPACT_AFTER_PICKS, escapeStep, isArrowKey, isOffscreen, nudgeOverride, type NudgeKind } from './pick.ts'
+import { effectiveRect, Overlay, type Mark, type OriginGhost, type OverlayApi, type PickSource } from './Overlay.tsx'
+import { COMPACT_AFTER_PICKS, escapeStep, inheritedShifts, isArrowKey, isOffscreen, nudgeOverride, type NudgeKind } from './pick.ts'
 import { useAltKey } from './useAltKey.ts'
 import {
   decideRefresh,
@@ -44,6 +44,10 @@ import { useTarget } from './useTarget.ts'
 
 /** Slow enough that adb keeps up, fast enough that dragging still feels live. */
 const ANDROID_OVERRIDE_INTERVAL_MS = 150
+/** How long "no ghost on the old place" stays in the status pill (Android). */
+const GHOST_NOTE_MS = 6000
+/** Why a moved element on Android got no ghost (i18n `ghost.<reason>`). */
+type GhostFailure = 'noFrame' | 'frameChanged' | 'noCanvas' | 'offFrame'
 /** After the page fired `load`, this long without a hello means no inspector script in it. */
 const INSPECTOR_TIMEOUT_MS = 2500
 /** A blip shorter than this (first connect, server restart) is not worth a red pill. */
@@ -185,6 +189,8 @@ export function App() {
   const [chat, setChat] = useState<ChatTarget>(null)
   const [dragging, setDragging] = useState(false)
   const [focusRequest, setFocusRequest] = useState<{ row: 'first' | 'chat'; nonce: number } | null>(null)
+  /** Text typed in the palette's field; it belongs to the selected element and is dropped with it. */
+  const [paletteDraft, setPaletteDraft] = useState('')
   const [popover, setPopover] = useState<'inbox' | 'status' | null>(null)
 
   const [androidOverrides, setAndroidOverrides] = useState<Record<NodeId, Override>>({})
@@ -238,12 +244,89 @@ export function App() {
   const lastSentAt = useRef(0)
   const trailing = useRef<number | undefined>(undefined)
 
+  // Android: the device picture is the only copy of how a moved element looked before the
+  // move, and the next frame already shows it moved — so the ghost is cut out at the first step.
+  const deviceImgRef = useRef<HTMLImageElement | null>(null)
+  const [originGhosts, setOriginGhosts] = useState<Record<NodeId, OriginGhost>>({})
+  const dropOriginGhost = useCallback((nodeId: NodeId) => {
+    setOriginGhosts((g) => {
+      if (!(nodeId in g)) return g
+      const next = { ...g }
+      delete next[nodeId]
+      return next
+    })
+  }, [])
+  /** Why a moved element got no ghost: said in the status pill, not only in the console. */
+  const [ghostNote, setGhostNote] = useState<{ reason: GhostFailure; seq: number } | null>(null)
+  const ghostFailed = useCallback((reason: GhostFailure, detail?: unknown) => {
+    console.warn(`[layout-debug] the moved element gets no ghost on its old place: ${reason}`, detail ?? '')
+    setGhostNote({ reason, seq: Date.now() })
+  }, [])
+  // Goes by itself after a few seconds, but not while its popover is open and being read.
+  const statusOpen = popover === 'status'
+  useEffect(() => {
+    if (!ghostNote || statusOpen) return
+    const timer = window.setTimeout(() => setGhostNote(null), GHOST_NOTE_MS)
+    return () => window.clearTimeout(timer)
+  }, [ghostNote, statusOpen])
+
+  const takeOriginGhost = useCallback(
+    (nodeId: NodeId, prev: Override | undefined) => {
+      const snap = live.current.androidSnapshot
+      const node = snap?.nodes[nodeId]
+      const img = deviceImgRef.current
+      // No <img> at all: the first device picture has not arrived (or failed).
+      if (!snap || !node || !img) return ghostFailed('noFrame')
+      // Its place as shown now: own size edits count, the move does not exist yet.
+      const base = effectiveRect(node, prev && { ...prev, dx: 0, dy: 0 })
+      const carried = inheritedShifts(snap.nodes, live.current.androidOverrides).get(nodeId)
+      const shown = { ...base, x: base.x + (carried?.x ?? 0), y: base.y + (carried?.y ?? 0) }
+      const src = img.currentSrc || img.src
+
+      const cut = () => {
+        const crop = frameCropRect(shown, { w: img.naturalWidth, h: img.naturalHeight }, snap.viewport)
+        if (!crop) return ghostFailed('offFrame')
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.max(1, Math.round(crop.w))
+        canvas.height = Math.max(1, Math.round(crop.h))
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return ghostFailed('noCanvas')
+        ctx.drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height)
+        setOriginGhosts((g) => ({ ...g, [nodeId]: { src: canvas.toDataURL('image/png'), base } }))
+      }
+
+      if (img.complete && img.naturalWidth > 0) return cut()
+      // The picture is still being decoded: the auto refresh (every ~0.8 s) or an earlier
+      // edit swapped the <img> to a newer frame a moment ago. That frame was captured before
+      // this move — the move's own frame is bumped only after the server has applied it,
+      // which is after this call — so it still shows the element in place. Wait for exactly
+      // that picture; if the <img> moves on to yet another frame first (decode() rejects),
+      // that one may already show the move, and no ghost is better than a wrong one.
+      img.decode().then(
+        () => {
+          const still = live.current.androidOverrides[nodeId]
+          // Reset (or moved back to zero) while the picture was decoding: nothing to show.
+          if (!still || (!still.dx && !still.dy)) return
+          if ((img.currentSrc || img.src) !== src || !img.naturalWidth) return ghostFailed('frameChanged')
+          cut()
+        },
+        (err: unknown) => ghostFailed((img.currentSrc || img.src) !== src ? 'frameChanged' : 'noFrame', err),
+      )
+    },
+    [ghostFailed],
+  )
+
   const setOverride = useCallback(
     (override: Override) => {
       if (!isAndroid) {
         web.setOverride(override)
         return
       }
+      const prev = live.current.androidOverrides[override.nodeId]
+      const moved = Boolean(override.dx || override.dy)
+      const wasMoved = Boolean(prev && (prev.dx || prev.dy))
+      if (moved && !wasMoved) takeOriginGhost(override.nodeId, prev)
+      else if (!moved && wasMoved) dropOriginGhost(override.nodeId)
       setAndroidOverrides((prev) => ({ ...prev, [override.nodeId]: override }))
       const flush = () => {
         lastSentAt.current = Date.now()
@@ -254,7 +337,7 @@ export function App() {
       if (since >= ANDROID_OVERRIDE_INTERVAL_MS) flush()
       else trailing.current = window.setTimeout(flush, ANDROID_OVERRIDE_INTERVAL_MS - since)
     },
-    [isAndroid, send, web],
+    [isAndroid, send, web, takeOriginGhost, dropOriginGhost],
   )
 
   const clearOverride = useCallback(
@@ -263,13 +346,14 @@ export function App() {
         // The device agent has no per-node undo: clear everything, then re-apply the rest.
         const rest = Object.values(androidOverrides).filter((o) => o.nodeId !== nodeId)
         setAndroidOverrides(Object.fromEntries(rest.map((o) => [o.nodeId, o])))
+        dropOriginGhost(nodeId)
         send({ t: 'androidClearOverrides' })
         for (const o of rest) send({ t: 'androidOverride', override: o })
       } else {
         web.clearOverride(nodeId)
       }
     },
-    [androidOverrides, isAndroid, send, web],
+    [androidOverrides, isAndroid, send, web, dropOriginGhost],
   )
 
   const deviceFrame = useDeviceFrame(state.androidFrame, isAndroid && Boolean(state.androidSnapshot))
@@ -283,8 +367,8 @@ export function App() {
   })
 
   // Timers outlive the render that set them; they read the window's current state here.
-  const live = useRef({ isAndroid, overrides, androidOverrides, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send })
-  live.current = { isAndroid, overrides, androidOverrides, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send }
+  const live = useRef({ isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send })
+  live.current = { isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send }
 
   // The web adapter owns its snapshot, so the server needs a copy for MCP consumers.
   // A 4000-node tree on every mutation would flood the socket — at most one send per
@@ -320,6 +404,7 @@ export function App() {
     if (!isAndroid || !state.androidSnapshot || androidSynced.current) return
     androidSynced.current = true
     send({ t: 'androidClearOverrides' })
+    setOriginGhosts({})
   }, [isAndroid, state.androidSnapshot, send])
 
   useEffect(() => {
@@ -339,6 +424,10 @@ export function App() {
     setSelectedId(id)
     setNudge(null)
     setChat((c) => (c?.kind === 'node' ? null : c))
+    // Another element: its palette starts with an empty field and takes no focus by itself
+    // (an old request would put the caret in the field the moment the palette mounts).
+    setPaletteDraft('')
+    setFocusRequest(null)
   }, [])
 
   // Node ids do not survive a page reload or a device recapture: the selection follows its
@@ -766,8 +855,9 @@ export function App() {
 
   // --- floating card placement (palette or chat) ---
   // A layer scrolled out of the frame keeps its selection, but the palette has nothing to point at.
+  const shifts = useMemo(() => (snapshot ? inheritedShifts(snapshot.nodes, overrides) : null), [snapshot, overrides])
   const selectedOffscreen = Boolean(
-    selected && snapshot && isOffscreen(effectiveRect(selected, overrides[selected.id]), snapshot.viewport),
+    selected && snapshot && isOffscreen(effectiveRect(selected, overrides[selected.id], shifts?.get(selected.id)), snapshot.viewport),
   )
   const showFloat = (chat?.kind === 'missing' || (Boolean(selected) && !selectedOffscreen)) && !dragging
   const stale = !isAndroid && web.scrolling
@@ -865,6 +955,14 @@ export function App() {
     setLocal((l) => [...l, entry])
   }
 
+  /** Enter in the palette's field: the message goes out and the chat opens to show the answer. */
+  const sendFromPalette = (text: string) => {
+    if (!selected) return
+    sendMessage(text)
+    setPaletteDraft('')
+    setChat({ kind: 'node' })
+  }
+
   const stopWaiting = () => {
     const next = new Set(dismissed)
     for (const r of selectedRequests) if (isOpen(statuses.get(r.id) ?? 'done')) next.add(r.id)
@@ -944,9 +1042,11 @@ export function App() {
       const k = e.key.toLowerCase()
       // The physical key as well, so the shortcut works with a non-Latin layout switched on.
       if ((k === 'c' || e.code === 'KeyC') && selected && !e.repeat) {
-        // The key must not also land as a character in the chat field it opens.
+        // The key must not also land as a character in the field it focuses.
         e.preventDefault()
-        openChat()
+        // Palette shown: C puts the caret in its chat field. Chat already open: as before.
+        if (chat) openChat()
+        else setFocusRequest({ row: 'chat', nonce: Date.now() })
       }
     }
     window.addEventListener('keydown', onKey)
@@ -1060,6 +1160,28 @@ export function App() {
           <button type="button" className="btn btn--icon" onClick={refresh.refreshNow} disabled={refresh.inflight || !state.online}>
             <IconRefresh size={14} />
             {refresh.inflight ? t('stale.capturing') : t('stale.refresh')}
+          </button>
+        </div>
+      ),
+    }
+  } else if (isAndroid && ghostNote) {
+    status = {
+      tone: 'warn',
+      text: t('status.ghostFailed'),
+      title: t(`ghost.${ghostNote.reason}`),
+      popover: (
+        <div className="pop__body">
+          <h2 className="pop__title">{t('ghost.title')}</h2>
+          <p className="pop__text pop__text--wrap">{t(`ghost.${ghostNote.reason}`)}</p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setGhostNote(null)
+              setPopover(null)
+            }}
+          >
+            {t('error.dismiss')}
           </button>
         </div>
       ),
@@ -1220,6 +1342,7 @@ export function App() {
             // tree, and a failed frame is explained by the status pill.
             deviceFrame.src && (
               <img
+                ref={deviceImgRef}
                 className="device"
                 src={deviceFrame.src}
                 alt={t('canvas.deviceAlt')}
@@ -1326,6 +1449,7 @@ export function App() {
             offset={{ x: device.x, y: device.y }}
             canvasWidth={canvasBox.w}
             marks={marks}
+            originGhosts={isAndroid ? originGhosts : undefined}
             unread={chat?.kind === 'node' && selected ? new Set([...unreadNodes].filter((id) => id !== selected.id)) : unreadNodes}
             selectedWorking={selectedWorking}
             stale={stale}
@@ -1334,6 +1458,8 @@ export function App() {
             onPicked={onPicked}
             onOverride={setOverride}
             onForwardWheel={isAndroid ? undefined : web.forwardWheel}
+            cursorLabel={t('cursor.select')}
+            cursorCompact={learned}
             apiRef={overlayApi}
           />
         )}
@@ -1413,6 +1539,12 @@ export function App() {
                   threadSize={selectedRequests.length}
                   detailsOpen={detailsOpen}
                   focusRequest={focusRequest}
+                  draft={paletteDraft}
+                  sendBlocked={!state.online ? t('chat.offline') : agentBusy ? t('chat.agentBusy') : null}
+                  offline={!state.online}
+                  onDraftChange={setPaletteDraft}
+                  onSend={sendFromPalette}
+                  onLeaveField={() => canvasRef.current?.focus({ preventScroll: true })}
                   onSelect={selectNode}
                   onOpenChat={openChat}
                   onDeselect={() => selectNode(null)}

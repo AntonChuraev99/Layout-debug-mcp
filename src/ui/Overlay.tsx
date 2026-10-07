@@ -10,22 +10,38 @@ import {
   cornersFor,
   decidePick,
   handleOrigin,
+  inheritedShifts,
   isLargeLayer,
   resizeFromCorner,
   wheelStep,
   type Corner,
   type Point,
 } from './pick.ts'
+import { TalkCursor, type TalkCursorApi } from './TalkCursor.tsx'
 import { fmtSigned } from './thread.ts'
 
-export function effectiveRect(node: LayoutNode, override: Override | undefined): Rect {
-  if (!override) return node.bounds
+/**
+ * Where the node is drawn now: its snapshot bounds, plus its own live edit, plus the
+ * moves of its ancestors that carry it along (`inherited`, from inheritedShifts).
+ */
+export function effectiveRect(node: LayoutNode, override: Override | undefined, inherited?: Point): Rect {
+  if (!override && !inherited) return node.bounds
   return {
-    x: node.bounds.x + override.dx,
-    y: node.bounds.y + override.dy,
-    w: override.width ?? node.bounds.w,
-    h: override.height ?? node.bounds.h,
+    x: node.bounds.x + (override?.dx ?? 0) + (inherited?.x ?? 0),
+    y: node.bounds.y + (override?.dy ?? 0) + (inherited?.y ?? 0),
+    w: override?.width ?? node.bounds.w,
+    h: override?.height ?? node.bounds.h,
   }
+}
+
+/**
+ * Android: a copy of the moved element cut from the device picture taken before its move,
+ * drawn faintly where it stood. `base` is that place in frame px without ancestors' moves,
+ * which are added at draw time. (On web the page draws its own ghost: src/inspector.)
+ */
+export interface OriginGhost {
+  src: string
+  base: Rect
 }
 
 /** How a pick was made: the window counts Alt picks and turns the pipette off after one. */
@@ -69,6 +85,8 @@ interface Props {
   offset: { x: number; y: number }
   canvasWidth: number
   marks: Mark[]
+  /** Android only: faint copies of moved elements on their old places. */
+  originGhosts?: Readonly<Record<NodeId, OriginGhost>>
   unread: ReadonlySet<NodeId>
   /** The selected element has a request in work: the spinner goes into its own label. */
   selectedWorking: boolean
@@ -82,6 +100,9 @@ interface Props {
   onOverride: (override: Override) => void
   /** Web: a wheel over the selected layer's body belongs to the page under it. */
   onForwardWheel?: (x: number, y: number, dx: number, dy: number) => void
+  /** The "Talk cursor" bubble: its text, and the folded "•••" once the user has learned picking. */
+  cursorLabel: string
+  cursorCompact: boolean
   apiRef?: Ref<OverlayApi>
 }
 
@@ -111,6 +132,7 @@ export function Overlay({
   offset,
   canvasWidth,
   marks,
+  originGhosts,
   unread,
   selectedWorking,
   stale,
@@ -119,6 +141,8 @@ export function Overlay({
   onPicked,
   onOverride,
   onForwardWheel,
+  cursorLabel,
+  cursorCompact,
   apiRef,
 }: Props) {
   const { t } = useT()
@@ -142,6 +166,29 @@ export function Overlay({
     if (!hoverOn) setHover(null)
   }, [hoverOn])
 
+  // --- Talk cursor: the follower that replaces the system cursor while picking ---
+  const talk = useRef<TalkCursorApi | null>(null)
+  const followMode = (picking || clickSelects) && !drag
+  const followModeRef = useRef(followMode)
+  followModeRef.current = followMode
+  // Alt released, the pipette used up, a drag started: gone before the next paint.
+  useLayoutEffect(() => {
+    if (!followMode) talk.current?.hide()
+  }, [followMode])
+  const stageRect = useCallback(() => rootRef.current?.parentElement?.getBoundingClientRect() ?? null, [])
+  /**
+   * The follower shows only for a mouse, in a picking mode, over the overlay itself or a box —
+   * never over the selection's grab zone or a corner handle, which keep their system cursors.
+   */
+  const follow = (clientX: number, clientY: number, eligible: boolean, layer: NodeId | null) =>
+    talk.current?.move(clientX, clientY, eligible, layer)
+  const followEligible = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'mouse' || dragRef.current) return false
+    if (!followModeRef.current && !altHeld(e)) return false
+    const target = e.target as Element | null
+    return !target?.closest('[data-grab], [data-handle]')
+  }
+
   useEffect(() => {
     if (!topAt) return
     const timer = window.setTimeout(() => setTopAt(0), TOP_FLASH_MS)
@@ -153,7 +200,8 @@ export function Overlay({
     [snapshot],
   )
 
-  const rectOf = useCallback((node: LayoutNode) => effectiveRect(node, overrides[node.id]), [overrides])
+  const shifts = useMemo(() => inheritedShifts(snapshot.nodes, overrides), [snapshot, overrides])
+  const rectOf = useCallback((node: LayoutNode) => effectiveRect(node, overrides[node.id], shifts.get(node.id)), [overrides, shifts])
   const parentOf = useCallback((id: NodeId) => snapshot.nodes[id]?.parentId ?? null, [snapshot])
 
   const hitTest = useCallback(
@@ -194,6 +242,8 @@ export function Overlay({
     const repeat = source !== 'click'
     const result = decidePick({ point: p, prev: repeat ? lastPick.current : null, selectedId, chain, level, parentOf })
     lastPick.current = repeat ? p : null
+    // The bubble has said its thing: it rests until another layer is under the cursor.
+    talk.current?.quiet(tight?.id ?? null)
     if (!result) {
       // A click on no layer at all (outside every box) deselects, as a pick of nothing.
       onSelect(null)
@@ -214,11 +264,44 @@ export function Overlay({
     onPicked(source)
   }
 
-  // The inspector hands over Alt+clicks it caught inside the page.
+  /**
+   * Where the window last saw the pointer: over the page (the iframe, or this overlay on top
+   * of it) or over the window's own chrome — palette, chat, inbox, header, banners. The page
+   * keeps its last point when the pointer slides from it onto a card floating over the frame
+   * (that pointerleave is inside its viewport, see src/inspector), so its answer to
+   * pointerQuery is stale then. An elementFromPoint check at that point would not catch it:
+   * the stale point is on the page, just next to the card.
+   */
+  const pointerOnChrome = useRef(false)
+  useEffect(() => {
+    const onOver = (e: PointerEvent) => {
+      const t = e.target instanceof Element ? e.target : null
+      pointerOnChrome.current = Boolean(t && !(t.tagName === 'IFRAME' || t.closest('.overlay')))
+    }
+    // Out of the window altogether: no resting point to trust either.
+    const onOut = (e: PointerEvent) => {
+      if (!e.relatedTarget) pointerOnChrome.current = true
+    }
+    document.addEventListener('pointerover', onOver, true)
+    document.addEventListener('pointerout', onOut, true)
+    return () => {
+      document.removeEventListener('pointerover', onOver, true)
+      document.removeEventListener('pointerout', onOut, true)
+    }
+  }, [])
+
+  // The inspector says where the pointer rests on the page (Alt went down without a move).
   const hoverAt = (p: Point) => {
+    // The pointer has since gone onto a card or the header: the page's point is stale.
+    if (pointerOnChrome.current) return
     const f = toFrame(p)
     const tight = hitTest(f.x, f.y)
     setHover((h) => (!tight ? null : h?.base === tight.id ? h : { base: tight.id, level: 0 }))
+    // Alt went down with the pointer resting on the page: the inspector knows where it is, so
+    // the tip is drawn right there, before any move (the browser may keep the old system
+    // cursor until the pointer moves; the follower does not wait for that).
+    const box = rootRef.current?.getBoundingClientRect()
+    if (box) follow(box.left + p.x, box.top + p.y, followModeRef.current, tight?.id ?? null)
   }
   const live = useRef({ pickAt, hoverAt })
   live.current = { pickAt, hoverAt }
@@ -234,6 +317,7 @@ export function Overlay({
   const startDrag = (d: Drag, e: React.PointerEvent<HTMLDivElement>) => {
     dragRef.current = d
     setDrag(d)
+    talk.current?.hide()
     e.currentTarget.setPointerCapture(e.pointerId)
     onDragChange(true)
   }
@@ -260,8 +344,10 @@ export function Overlay({
       return
     }
 
+    const eligible = followEligible(e)
+    const tight = eligible || hoverOn || altHeld(e) ? hitTest(x, y) : null
+    follow(e.clientX, e.clientY, eligible, tight?.id ?? null)
     if (!hoverOn && !altHeld(e)) return
-    const tight = hitTest(x, y)
     setHover((h) => {
       if (!tight) return null
       // Onto another tightest layer: the wheel level starts over.
@@ -416,8 +502,20 @@ export function Overlay({
       onPointerCancel={endDrag}
       onPointerLeave={() => {
         if (!dragRef.current) setHover(null)
+        // Onto the palette, the header or out of the frame: the system cursor is back there.
+        talk.current?.hide()
       }}
     >
+      <TalkCursor label={cursorLabel} compact={cursorCompact} stage={stageRect} apiRef={talk} />
+      {originGhosts &&
+        Object.entries(originGhosts).map(([id, g]) => {
+          const ov = overrides[id]
+          if (!snapshot.nodes[id] || !ov || (!ov.dx && !ov.dy)) return null
+          const carried = shifts.get(id)
+          const r = { ...g.base, x: g.base.x + (carried?.x ?? 0), y: g.base.y + (carried?.y ?? 0) }
+          return <img key={`og-${id}`} className="origin-ghost" src={g.src} alt="" aria-hidden="true" draggable={false} style={place(r)} />
+        })}
+
       {marks.map((m) => {
         const node = snapshot.nodes[m.nodeId]
         if (!node) return null

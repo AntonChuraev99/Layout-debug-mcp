@@ -62,6 +62,23 @@ export function placeLabel(box: Rect, labelWidth: number, canvasWidth: number, l
   }
 }
 
+/**
+ * The part of a device picture that shows `rect` (frame px). The picture may be decoded at
+ * another size than the frame (`natural` vs `viewport`); the result is in picture pixels,
+ * clipped to the picture. Null when nothing of the rect is on it.
+ */
+export function frameCropRect(rect: Rect, natural: { w: number; h: number }, viewport: { w: number; h: number }): Rect | null {
+  if (viewport.w <= 0 || viewport.h <= 0 || natural.w <= 0 || natural.h <= 0) return null
+  const kx = natural.w / viewport.w
+  const ky = natural.h / viewport.h
+  const x0 = clamp(rect.x * kx, 0, natural.w)
+  const y0 = clamp(rect.y * ky, 0, natural.h)
+  const x1 = clamp((rect.x + rect.w) * kx, 0, natural.w)
+  const y1 = clamp((rect.y + rect.h) * ky, 0, natural.h)
+  if (x1 - x0 < 1 || y1 - y0 < 1) return null
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
 export function union(a: Rect, b: Rect): Rect {
   const x = Math.min(a.x, b.x)
   const y = Math.min(a.y, b.y)

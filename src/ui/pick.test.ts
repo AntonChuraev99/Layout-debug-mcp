@@ -7,6 +7,7 @@ import {
   decidePick,
   escapeStep,
   handleOrigin,
+  inheritedShifts,
   isLargeLayer,
   isOffscreen,
   nudgeOverride,
@@ -14,7 +15,7 @@ import {
   wheelStep,
   WHEEL_IDLE_MS,
 } from './pick.ts'
-import { placeLabel } from './geometry.ts'
+import { frameCropRect, placeLabel } from './geometry.ts'
 
 // root > card > row > button
 const parents: Record<string, string | null> = { root: null, card: 'root', row: 'card', button: 'row' }
@@ -201,6 +202,50 @@ describe('nudgeOverride', () => {
   it('never sizes below one unit', () => {
     assert.equal(nudgeOverride('resize', 'ArrowLeft', true, 'n', undefined, { w: 3, h: 3 }, 1).width, 1)
     assert.equal(nudgeOverride('resize', 'ArrowUp', true, 'n', undefined, { w: 3, h: 3 }, 2).height, 2)
+  })
+})
+
+describe('inheritedShifts', () => {
+  // root > card > (row > button, title)
+  const nodes = {
+    root: { childIds: ['card'] },
+    card: { childIds: ['row', 'title'] },
+    row: { childIds: ['button'] },
+    button: { childIds: [] },
+    title: { childIds: [] },
+  }
+  const ov = (nodeId: string, dx: number, dy: number, extra: { width?: number; hidden?: boolean } = {}) => ({ nodeId, dx, dy, ...extra })
+
+  it('carries every descendant of a moved node, not the node itself', () => {
+    const s = inheritedShifts(nodes, { row: ov('row', 120, 30) })
+    assert.deepEqual(s.get('button'), { x: 120, y: 30 })
+    assert.equal(s.has('row'), false)
+    assert.equal(s.has('title'), false)
+    assert.equal(s.has('card'), false)
+  })
+  it('adds nested moves up', () => {
+    const s = inheritedShifts(nodes, { card: ov('card', 10, 0), row: ov('row', 5, 7) })
+    assert.deepEqual(s.get('row'), { x: 10, y: 0 })
+    assert.deepEqual(s.get('button'), { x: 15, y: 7 })
+    assert.deepEqual(s.get('title'), { x: 10, y: 0 })
+  })
+  it('ignores size-only and hide-only edits: they reflow, and the snapshot already shows that', () => {
+    assert.equal(inheritedShifts(nodes, { card: ov('card', 0, 0, { width: 300, hidden: true }) }).size, 0)
+  })
+  it('survives an override for a node missing from the snapshot', () => {
+    assert.equal(inheritedShifts(nodes, { gone: ov('gone', 4, 4) }).size, 0)
+  })
+})
+
+describe('frameCropRect', () => {
+  it('maps frame px to picture px when the picture is decoded at another size', () => {
+    assert.deepEqual(frameCropRect({ x: 100, y: 200, w: 50, h: 40 }, { w: 540, h: 1200 }, { w: 1080, h: 2400 }), { x: 50, y: 100, w: 25, h: 20 })
+    assert.deepEqual(frameCropRect({ x: 10, y: 20, w: 30, h: 40 }, { w: 1080, h: 2400 }, { w: 1080, h: 2400 }), { x: 10, y: 20, w: 30, h: 40 })
+  })
+  it('clips to the picture and gives up on a rect off it', () => {
+    assert.deepEqual(frameCropRect({ x: -10, y: 2390, w: 40, h: 40 }, { w: 1080, h: 2400 }, { w: 1080, h: 2400 }), { x: 0, y: 2390, w: 30, h: 10 })
+    assert.equal(frameCropRect({ x: 2000, y: 10, w: 40, h: 40 }, { w: 1080, h: 2400 }, { w: 1080, h: 2400 }), null)
+    assert.equal(frameCropRect({ x: 10, y: 10, w: 40, h: 40 }, { w: 0, h: 0 }, { w: 1080, h: 2400 }), null)
   })
 })
 

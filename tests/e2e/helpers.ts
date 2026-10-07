@@ -122,7 +122,10 @@ export async function serveDir(dir: string): Promise<StaticSite> {
 // --- the window ----------------------------------------------------------------
 
 export const frameOf = (page: Page) => page.frameLocator('iframe[title="Page being edited"]')
-export const palette = (page: Page) => page.getByRole('menu', { name: /^Actions:/ })
+/** The card next to the selected element: a dialog with the chat field and the menu of rows. */
+export const palette = (page: Page) => page.getByRole('dialog', { name: /^Actions:/ })
+/** The always-open chat field of the palette. */
+export const paletteField = (page: Page) => palette(page).getByRole('textbox', { name: 'Message to the agent' })
 export const chatDialog = (page: Page) => page.getByRole('dialog', { name: /^Chat:/ })
 export const addressField = (page: Page) => page.getByRole('textbox', { name: 'Page address' })
 export const selectedBox = (page: Page) => page.locator('.overlay .box--selected')
@@ -227,6 +230,14 @@ export async function sendFromChat(page: Page, text: string): Promise<void> {
   await input.fill(text)
   await input.press('Enter')
   await expect(chat.getByRole('log')).toContainText(text)
+}
+
+/** Types into the palette's field of the selected element and sends: the chat opens with the message. */
+export async function sendFromPalette(page: Page, text: string): Promise<void> {
+  const input = paletteField(page)
+  await input.fill(text)
+  await input.press('Enter')
+  await expect(chatDialog(page).getByRole('log')).toContainText(text)
 }
 
 export async function openInbox(page: Page): Promise<Locator> {

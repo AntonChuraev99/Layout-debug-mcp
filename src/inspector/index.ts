@@ -21,6 +21,7 @@ import {
   type StyleDigest,
   type UiToInspector,
 } from '../shared/protocol.ts'
+import { ghostInset, type Area } from './ghost.ts'
 import { altHeld, forwardedKey, keyTarget, type InspectorKeyMessage } from './keys.ts'
 
 /**
@@ -231,6 +232,8 @@ function capture(): Snapshot {
   try {
     visit(root, null, 0)
     elementsById = elements
+    // Moves are lifted right now: the unmoved places are measurable.
+    replaceGhosts()
   } finally {
     withoutObserving(reapplyOverrides)
   }
@@ -302,6 +305,195 @@ function clearOverride(nodeId: NodeId) {
   const el = elementsById.get(nodeId)
   if (el) restoreOriginal(el)
   overrides.delete(nodeId)
+  dropGhost(nodeId)
+}
+
+// --- origin ghosts ------------------------------------------------------------
+
+/**
+ * While an element is moved, a faint copy of it stays where it came from, so the user
+ * sees the distance travelled. The copies live in one layer appended to <html>, outside
+ * <body>: the snapshot walks body only and the MutationObserver watches body only, so a
+ * ghost is never a layer, never a hit, and never triggers a capture. The page's own DOM
+ * (and the framework that owns it) is not touched.
+ *
+ * A copy carries the element's computed styles inline and none of its identity (class,
+ * id, data-*, ARIA): the page's selectors, tests and querySelector calls never find it.
+ */
+const GHOST_ATTR = 'data-ld-ghost'
+const GHOST_OPACITY = '0.22'
+/** Past this many descendants the ghost is the element's own box only: copying styles costs per node. */
+const GHOST_MAX_NODES = 400
+/** Attributes a copy keeps (geometry and media); everything else that names or wires it goes. */
+const GHOST_DROP_ATTR = /^(id|class|style|name|for|form|role|tabindex|autofocus|autoplay|contenteditable|draggable|href|on.*|data-.*|aria-.*)$/i
+
+const ghosts = new Map<NodeId, HTMLElement>()
+let ghostLayer: HTMLElement | null = null
+
+function ghostHost(): HTMLElement {
+  if (ghostLayer?.isConnected) return ghostLayer
+  const layer = document.createElement('div')
+  layer.setAttribute(GHOST_ATTR, 'layer')
+  layer.setAttribute('aria-hidden', 'true')
+  layer.inert = true
+  // Absolute at the document origin: ghosts placed in document coordinates scroll with it.
+  // z-index 0, not "on top of everything": the page's own raised layers (modals, sticky
+  // headers with a z-index, menus) stay above the ghost, plain content stays below it.
+  layer.style.cssText =
+    'position:absolute;left:0;top:0;width:0;height:0;margin:0;padding:0;border:0;overflow:visible;pointer-events:none;z-index:0;'
+  document.documentElement.appendChild(layer)
+  ghostLayer = layer
+  return layer
+}
+
+function inlineStyles(from: Element, to: Element) {
+  const cs = getComputedStyle(from)
+  let css = ''
+  for (let i = 0; i < cs.length; i++) {
+    const p = cs[i]!
+    css += `${p}:${cs.getPropertyValue(p)};`
+  }
+  // A copy never moves or reacts by itself.
+  to.setAttribute('style', `${css}animation:none;transition:none;pointer-events:none;`)
+  for (const a of Array.from(to.attributes)) {
+    if (a.name !== 'style' && GHOST_DROP_ATTR.test(a.name)) to.removeAttribute(a.name)
+  }
+}
+
+function makeGhost(el: HTMLElement): HTMLElement {
+  const deep = el.getElementsByTagName('*').length <= GHOST_MAX_NODES
+  const copy = el.cloneNode(deep) as HTMLElement
+  const from = [el, ...(deep ? Array.from(el.getElementsByTagName('*')) : [])]
+  const to = [copy, ...(deep ? Array.from(copy.getElementsByTagName('*')) : [])]
+  from.forEach((f, i) => {
+    const t = to[i]
+    if (!t) return
+    // Frames and scripts would load or run again; media would play again.
+    if (t instanceof HTMLIFrameElement || t instanceof HTMLScriptElement || t instanceof HTMLObjectElement) {
+      const box = document.createElement('div')
+      t.replaceWith(box)
+      inlineStyles(f, box)
+      return
+    }
+    if (t instanceof HTMLMediaElement) t.preload = 'none'
+    inlineStyles(f, t)
+  })
+  copy.setAttribute(GHOST_ATTR, 'node')
+  return copy
+}
+
+/** What the moves of the element's ancestors add to its place (they carry it along). */
+function ancestorShift(el: HTMLElement): { x: number; y: number } {
+  let x = 0
+  let y = 0
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const id = ids.get(p)
+    const o = id ? overrides.get(id) : undefined
+    if (o) {
+      x += o.dx
+      y += o.dy
+    }
+  }
+  return { x, y }
+}
+
+/**
+ * Puts the ghost where the element stood before its own move: its unmoved place plus what
+ * moved ancestors carry it by. Call while every move is lifted (liftTranslates).
+ */
+function placeGhost(ghost: HTMLElement, el: HTMLElement) {
+  const r = el.getBoundingClientRect()
+  const carried = ancestorShift(el)
+  const s = ghost.style
+  s.position = 'absolute'
+  s.left = `${r.left + carried.x + window.scrollX}px`
+  s.top = `${r.top + carried.y + window.scrollY}px`
+  s.width = `${r.width}px`
+  s.height = `${r.height}px`
+  s.margin = '0'
+  s.boxSizing = 'border-box'
+  s.translate = 'none'
+  s.transform = 'none'
+  s.opacity = GHOST_OPACITY
+  // The ghost hangs outside the element's scrolling and clipping containers, so it is cut
+  // to what of its place they still show; nothing shown — no ghost.
+  const box = { x: r.left + carried.x, y: r.top + carried.y, w: r.width, h: r.height }
+  const inset = ghostInset(box, visibleArea(el))
+  s.visibility = inset ? 'visible' : 'hidden'
+  s.clipPath = inset ? `inset(${inset.top}px ${inset.right}px ${inset.bottom}px ${inset.left}px)` : 'none'
+}
+
+/** Own move plus what moved ancestors carry it by. */
+function shiftOf(el: HTMLElement): { x: number; y: number } {
+  const id = ids.get(el)
+  const own = id ? overrides.get(id) : undefined
+  const up = ancestorShift(el)
+  return { x: up.x + (own?.dx ?? 0), y: up.y + (own?.dy ?? 0) }
+}
+
+/**
+ * The part of the viewport the element's ancestors with `overflow` other than visible let
+ * through (their padding boxes, at their moved places), in viewport px. Body and html
+ * scroll the document itself, which the ghost layer follows, so they do not count — and
+ * neither does the viewport: the layer scrolls with the document, a viewport cut taken now
+ * would be wrong one wheel notch later. Infinite when nothing clips. Call with moves lifted.
+ */
+function visibleArea(el: HTMLElement): Area {
+  const area: Area = { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity }
+  for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+    const cs = getComputedStyle(p)
+    const clipX = cs.overflowX !== 'visible'
+    const clipY = cs.overflowY !== 'visible'
+    if (!clipX && !clipY) continue
+    const r = p.getBoundingClientRect()
+    const shift = shiftOf(p)
+    const left = r.left + p.clientLeft + shift.x
+    const top = r.top + p.clientTop + shift.y
+    if (clipX) {
+      area.left = Math.max(area.left, left)
+      area.right = Math.min(area.right, left + p.clientWidth)
+    }
+    if (clipY) {
+      area.top = Math.max(area.top, top)
+      area.bottom = Math.min(area.bottom, top + p.clientHeight)
+    }
+  }
+  return area
+}
+
+
+/** Creates or drops the ghost of an override's element to match whether it is moved. */
+function syncGhost(o: Override) {
+  const el = elementsById.get(o.nodeId)
+  if (!el || (!o.dx && !o.dy)) return dropGhost(o.nodeId)
+  if (ghosts.has(o.nodeId)) return
+  liftTranslates()
+  try {
+    const ghost = makeGhost(el)
+    placeGhost(ghost, el)
+    ghostHost().appendChild(ghost)
+    ghosts.set(o.nodeId, ghost)
+  } finally {
+    reapplyOverrides()
+  }
+}
+
+function dropGhost(nodeId: NodeId) {
+  ghosts.get(nodeId)?.remove()
+  ghosts.delete(nodeId)
+  if (!ghosts.size) {
+    ghostLayer?.remove()
+    ghostLayer = null
+  }
+}
+
+/** Layout changed (capture): ghosts follow their elements' unmoved places; gone elements lose theirs. */
+function replaceGhosts() {
+  for (const [id, ghost] of ghosts) {
+    const el = elementsById.get(id)
+    if (el?.isConnected) placeGhost(ghost, el)
+    else dropGhost(id)
+  }
 }
 
 /**
@@ -354,7 +546,11 @@ window.addEventListener('message', (event: MessageEvent) => {
       break
     case 'setOverride':
       overrides.set(data.override.nodeId, data.override)
-      withoutObserving(() => applyOverride(data.override))
+      withoutObserving(() => {
+        // The ghost is taken before the move lands, from the element as it stands.
+        syncGhost(data.override)
+        applyOverride(data.override)
+      })
       // A size change reflows the page: neighbours (and the element itself, in a
       // centred or justified row) move, so the window needs fresh bounds.
       scheduleCapture()
@@ -395,8 +591,14 @@ let lastPointer: { x: number; y: number } | null = null
 function postPointer() {
   if (lastPointer) post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'pointer', x: lastPointer.x, y: lastPointer.y })
 }
-document.documentElement.addEventListener('pointerleave', () => {
-  lastPointer = null
+// A real leave only. When Alt goes down, the window's overlay starts taking the mouse over
+// this frame and Chromium re-hit-tests the resting pointer at once: the page gets a
+// pointerleave a few ms after (or before) the window's pointerQuery, with the pointer still
+// inside the viewport. Dropping the position on that one lost the answer about every third
+// press (e2e 3d2, the Talk cursor). A pointer that really left is at or past the edge.
+document.documentElement.addEventListener('pointerleave', (e: PointerEvent) => {
+  const inside = e.clientX >= 0 && e.clientY >= 0 && e.clientX < window.innerWidth && e.clientY < window.innerHeight
+  if (!inside) lastPointer = null
 })
 
 // --- keys and the selection modifier ------------------------------------------
@@ -538,6 +740,7 @@ function movesSelection(target: EventTarget | null): boolean {
 
 // A clock, not requestAnimationFrame: a hidden tab never runs rAF, and the gate would stay shut.
 let scrollPostedAt = 0
+let ghostsPlacedAt = 0
 window.addEventListener(
   'scroll',
   (e: Event) => {
@@ -545,6 +748,19 @@ window.addEventListener(
     if (movesSelection(e.target) && now - scrollPostedAt >= 16) {
       scrollPostedAt = now
       post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'scrolling' })
+    }
+    // An inner list scrolled: its moved elements' ghosts follow (and get cut) right away,
+    // not only at the next capture.
+    if (ghosts.size && e.target !== document && now - ghostsPlacedAt >= 16) {
+      ghostsPlacedAt = now
+      withoutObserving(() => {
+        liftTranslates()
+        try {
+          replaceGhosts()
+        } finally {
+          reapplyOverrides()
+        }
+      })
     }
     scheduleCapture(100)
   },

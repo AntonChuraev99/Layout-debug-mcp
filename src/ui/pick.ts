@@ -204,6 +204,34 @@ export function resizeFromCorner(corner: Corner, base: SizeBase, delta: Point, m
   return { dx: Math.round(dx), dy: Math.round(dy), w: Math.round(w), h: Math.round(h) }
 }
 
+/**
+ * How far each node is carried by the moves of its ancestors. A live move shifts the
+ * whole subtree in the target (`translate` on web, an offset modifier on Compose), while
+ * snapshot bounds are measured without the moves — so a child of a moved element sits at
+ * `bounds + Σ ancestors' dx/dy`. Nested moves add up. Only nodes under a move are listed;
+ * the node's own override is not included (see effectiveRect).
+ */
+export function inheritedShifts(
+  nodes: Readonly<Record<NodeId, { childIds: readonly NodeId[] }>>,
+  overrides: Readonly<Record<NodeId, Override>>,
+): Map<NodeId, Point> {
+  const out = new Map<NodeId, Point>()
+  for (const o of Object.values(overrides)) {
+    if (!o.dx && !o.dy) continue
+    const stack = [...(nodes[o.nodeId]?.childIds ?? [])]
+    const seen = new Set<NodeId>()
+    while (stack.length) {
+      const id = stack.pop()!
+      if (seen.has(id)) continue
+      seen.add(id)
+      const prev = out.get(id)
+      out.set(id, { x: (prev?.x ?? 0) + o.dx, y: (prev?.y ?? 0) + o.dy })
+      stack.push(...(nodes[id]?.childIds ?? []))
+    }
+  }
+  return out
+}
+
 export type NudgeKind = 'move' | 'resize'
 export type ArrowKey = 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown'
 export const ARROW_KEYS: readonly ArrowKey[] = ['ArrowLeft', 'ArrowUp', 'ArrowDown', 'ArrowRight']
