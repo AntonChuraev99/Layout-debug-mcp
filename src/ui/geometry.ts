@@ -42,6 +42,72 @@ export function placePopover(
   return { x: Math.max(margin, canvas.w - w - margin), y: margin, side: 'corner' }
 }
 
+export interface HeldPlacement extends Placement {
+  /** The tallest the card may grow on this side; past it, its own content scrolls. */
+  maxH: number
+}
+
+/** Less room than this above or below the element is no place for a card that holds a thread. */
+export const MIN_HELD_ROOM = 160
+
+/**
+ * Placement of a card that grows while it is open (the chat: every reply adds a line).
+ *
+ * The first call (`held` null) picks the side as `placePopover` does. Later calls pass
+ * that side back: the card stays there and grows toward the free edge, and once the room
+ * on that side is used up it stops growing — `maxH` is that room, the card's own list
+ * scrolls. Re-picking the side from the grown size would throw the card across the frame
+ * each time a line no longer fits (above the element → top-right corner).
+ *
+ * A held side is dropped only when it cannot take the card at all any more: the window
+ * got narrower than the card next to the element, or less than `minRoom` is left above or
+ * below it (the element moved, the window got shorter).
+ */
+export function placeHeldPopover(
+  anchor: Rect,
+  size: { w: number; h: number },
+  canvas: { w: number; h: number },
+  held: Side | null,
+  gap = 12,
+  margin = 12,
+  minRoom = MIN_HELD_ROOM,
+): HeldPlacement {
+  const { w, h } = size
+  const fullH = canvas.h - margin * 2
+  const sideY = clamp(anchor.y, margin, canvas.h - h - margin)
+  const x = clamp(anchor.x + anchor.w - w, margin, canvas.w - w - margin)
+  const below = anchor.y + anchor.h + gap
+  const roomBelow = canvas.h - margin - below
+  const roomAbove = anchor.y - gap - margin
+
+  const kept = ((): HeldPlacement | null => {
+    switch (held) {
+      case 'right': {
+        const right = anchor.x + anchor.w + gap
+        return right + w <= canvas.w - margin ? { x: right, y: sideY, side: 'right', maxH: fullH } : null
+      }
+      case 'left': {
+        const left = anchor.x - gap - w
+        return left >= margin ? { x: left, y: sideY, side: 'left', maxH: fullH } : null
+      }
+      case 'bottom':
+        return roomBelow >= Math.min(h, minRoom) ? { x, y: below, side: 'bottom', maxH: roomBelow } : null
+      case 'top':
+        // Bottom edge pinned `gap` above the element; the card grows upward into the room.
+        return roomAbove >= Math.min(h, minRoom) ? { x, y: anchor.y - gap - Math.min(h, roomAbove), side: 'top', maxH: roomAbove } : null
+      case 'corner':
+        return { x: Math.max(margin, canvas.w - w - margin), y: margin, side: 'corner', maxH: fullH }
+      default:
+        return null
+    }
+  })()
+  if (kept) return kept
+
+  const p = placePopover(anchor, size, canvas, gap, margin)
+  const maxH = p.side === 'top' ? roomAbove : p.side === 'bottom' ? roomBelow : fullH
+  return { ...p, maxH }
+}
+
 export interface LabelPlacement {
   vertical: 'above' | 'below' | 'inside'
   align: 'left' | 'right'

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import type { ChatMessage, EditRequest, ErrorCode, LayoutNode, NodeId, Override, TargetKind } from '../shared/protocol.ts'
+import type { ChatMessage, EditRequest, ErrorCode, LayoutNode, NodeId, Override, Snapshot, TargetKind } from '../shared/protocol.ts'
 import { ActionPalette } from './ActionPalette.tsx'
 import { Blank, CopyBlock } from './Blank.tsx'
 import { ChatPopover, type LocalMessage } from './ChatPopover.tsx'
-import { frameCropRect, placePopover, union, type Side } from './geometry.ts'
+import { frameCropRect, placeHeldPopover, placePopover, union, type Side } from './geometry.ts'
 import { androidStateFor, rejectsSubmit, resolveRequestErrors, type AndroidState } from './errors.ts'
 import { Header, type StatusInfo } from './Header.tsx'
 import { useT, type MsgKey } from './i18n.ts'
@@ -17,9 +17,13 @@ import {
   decideRefresh,
   overridesHandedOver,
   reapplyPlan,
+  frameStack,
+  overlaySource,
   REFRESH_NOTE_PREFIX,
+  showsConnecting,
   snapshotFingerprint,
   type CarriedOverride,
+  type HeldView,
 } from './refresh.ts'
 import {
   analyzeChat,
@@ -174,6 +178,13 @@ export function App() {
   const [url, setUrl] = useState('')
   const [urlDraft, setUrlDraft] = useState('')
   const [frameKey, setFrameKey] = useState(0)
+  const frameKeyRef = useRef(frameKey)
+  frameKeyRef.current = frameKey
+  /**
+   * A refresh the window started itself: the old iframe (`key`) stays over the new one until
+   * the new page is in (frameStack), and `view` is what the overlay draws meanwhile (overlaySource).
+   */
+  const [swap, setSwap] = useState<{ key: number; view: HeldView<Snapshot, Record<NodeId, Override>> } | null>(null)
   const [frameLoaded, setFrameLoaded] = useState(false)
   const [inspectorSilent, setInspectorSilent] = useState(false)
   const [bannerHidden, setBannerHidden] = useState(false)
@@ -234,8 +245,12 @@ export function App() {
   const lastWebSnapshot = useRef(web.snapshot)
   if (web.snapshot) lastWebSnapshot.current = web.snapshot
   const reloading = cycle.current?.target === 'web' && cycle.current.phase === 'fresh'
-  const snapshot = isAndroid ? state.androidSnapshot : (web.snapshot ?? (reloading ? lastWebSnapshot.current : null))
-  const overrides = isAndroid ? androidOverrides : web.overrides
+  // While the old page is held over the reloaded one, the overlay draws what that page shows:
+  // its snapshot with its live edits (overlaySource). The same flag drops the held frame.
+  const webView = overlaySource(swap?.view ?? null, { snapshot: web.snapshot, overrides: web.overrides })
+  const holdingFrame = !isAndroid && swap !== null && webView.holding
+  const snapshot = isAndroid ? state.androidSnapshot : (webView.snapshot ?? (reloading ? lastWebSnapshot.current : null))
+  const overrides = isAndroid ? androidOverrides : webView.overrides
   const selected = selectedId && snapshot ? snapshot.nodes[selectedId] : undefined
 
   // A drag fires a pointermove per pixel. On web that is a postMessage; on Android it
@@ -545,6 +560,8 @@ export function App() {
     if (!c) return
     window.clearTimeout(c.timer)
     cycle.current = null
+    // The new page is in (or never came): it takes over from the held old one either way.
+    setSwap(null)
     const ids = c.requests.map((r) => r.id)
     setHolding((s) => new Set([...s].filter((id) => !ids.includes(id))))
     fadeOut(ids)
@@ -587,6 +604,10 @@ export function App() {
     reloadLoadedAt.current = null
     c.phase = 'fresh'
     c.timer = window.setTimeout(() => finishCycle(true), REFRESH_TIMEOUT_MS)
+    // The page loads into a new iframe under the current one, which stays on screen until
+    // the new page reports its first snapshot: no white frame between the two documents.
+    // The overlay keeps drawing that page as it is now — with every live edit still on it.
+    setSwap({ key: frameKeyRef.current, view: { snapshot: L.webSnapshot, overrides: L.overrides, loadedAt: null } })
     setFrameKey((k) => k + 1)
   }
 
@@ -660,6 +681,7 @@ export function App() {
   useEffect(() => {
     carried.current = null
     reloadLoadedAt.current = null
+    setSwap(null)
     finishCycle(false)
   }, [url, isAndroid])
 
@@ -863,8 +885,11 @@ export function App() {
   const stale = !isAndroid && web.scrolling
   // An open chat stays put while the page scrolls: the user may be typing in it.
   const floatStale = stale && !chat
-  const [floatPos, setFloatPos] = useState<{ x: number; y: number; side: Side } | null>(null)
+  /** `maxH`: the open chat's room on its side (placeHeldPopover); the palette has none. */
+  const [floatPos, setFloatPos] = useState<{ x: number; y: number; side: Side; maxH?: number } | null>(null)
   const [floatSize, setFloatSize] = useState({ w: 0, h: 0 })
+  /** The side the open chat took when it opened, and whose chat it is: it grows there instead of jumping elsewhere. */
+  const chatSide = useRef<{ side: Side; anchors: LayoutNode['anchors'] } | null>(null)
 
   useEffect(() => {
     const el = floatRef.current?.firstElementChild as HTMLElement | null | undefined
@@ -877,6 +902,11 @@ export function App() {
   useLayoutEffect(() => {
     const canvas = canvasRef.current
     const card = floatRef.current?.firstElementChild as HTMLElement | null | undefined
+    // A chat that closes (or turns into the palette) gives up its side; the next one picks afresh.
+    // So does a chat that switches to another element in one render (opened from the Inbox).
+    // A reload keeps the side: the id changes, the element's anchors do not.
+    const owner = selectedId ? snapshot?.nodes[selectedId] : undefined
+    if (chat?.kind !== 'node' || (owner && chatSide.current && !sameElement(owner, { ...owner, anchors: chatSide.current.anchors }))) chatSide.current = null
     if (!showFloat || !canvas || !card) {
       setFloatPos(null)
       return
@@ -897,8 +927,17 @@ export function App() {
       return
     }
     const anchor = rects.reduce(union)
-    const p = placePopover(anchor, size, box, 12, FLOAT_MARGIN)
-    setFloatPos((prev) => (prev && prev.x === p.x && prev.y === p.y && prev.side === p.side ? prev : p))
+    // The chat grows with every line: it keeps the side it opened on and is capped to that
+    // side's room (its log scrolls), instead of being re-placed from its grown size.
+    const p: { x: number; y: number; side: Side; maxH?: number } =
+      chat?.kind === 'node'
+        ? placeHeldPopover(anchor, size, box, chatSide.current?.side ?? null, 12, FLOAT_MARGIN)
+        : placePopover(anchor, size, box, 12, FLOAT_MARGIN)
+    if (chat?.kind === 'node') {
+      const anchors = owner?.anchors ?? chatSide.current?.anchors
+      chatSide.current = anchors ? { side: p.side, anchors } : null
+    }
+    setFloatPos((prev) => (prev && prev.x === p.x && prev.y === p.y && prev.side === p.side && prev.maxH === p.maxH ? prev : p))
   }, [showFloat, chat, selectedId, overrides, canvasBox, floatSize, detailsOpen, device, snapshot])
 
   // The palette (or chat) closing: a static copy of the last frame fades out for
@@ -927,6 +966,8 @@ export function App() {
     setUrlDraft(next)
     selectNode(null)
     setChat(null)
+    // The user asked for this load: it shows as one, with no old page held over it.
+    setSwap(null)
     if (next === url) setFrameKey((k) => k + 1)
     else setUrl(next)
   }
@@ -1222,11 +1263,11 @@ export function App() {
         </div>
       ),
     }
-  } else if (!isAndroid && url && !web.connected) {
-    status = { tone: 'busy', text: t('status.connectingInspector') }
   }
+  const webConnecting = !isAndroid && showsConnecting({ url, connected: web.connected, silent: inspectorSilent, swapping: holdingFrame })
+  if (!status && webConnecting) status = { tone: 'busy', text: t('status.connectingInspector') }
 
-  const loading = (!isAndroid && Boolean(url) && !web.connected && !inspectorSilent) || (isAndroid && androidState === 'connecting' && state.online)
+  const loading = webConnecting || (isAndroid && androidState === 'connecting' && state.online)
 
   // --- inbox data ---
   const inboxItems: InboxItem[] = state.requests.map((r) => ({
@@ -1399,20 +1440,31 @@ export function App() {
             </Blank>
           )
         ) : url ? (
-          <iframe
-            key={frameKey}
-            ref={iframeRef}
-            src={url}
-            title={t('canvas.frameTitle')}
-            onLoad={() => {
-              web.onFrameLoad()
-              setFrameLoaded(true)
-              if (cycle.current?.phase === 'fresh' || carried.current) reloadLoadedAt.current = Date.now()
-              // The inspector posts its first snapshot on its own — possibly before this event,
-              // which has just cleared it. Ask once more, so a snapshot always follows a load.
-              web.capture()
-            }}
-          />
+          frameStack(frameKey, holdingFrame && swap ? swap.key : null).map((f) =>
+            f.held ? (
+              // The page before the window's own refresh: only a picture now. The bridge talks
+              // to the new frame under it, so nothing it posts counts any more.
+              <iframe key={f.key} src={url} className="frame--held" aria-hidden="true" tabIndex={-1} />
+            ) : (
+              <iframe
+                key={f.key}
+                ref={iframeRef}
+                src={url}
+                title={t('canvas.frameTitle')}
+                onLoad={() => {
+                  web.onFrameLoad()
+                  setFrameLoaded(true)
+                  const loadedAt = Date.now()
+                  if (cycle.current?.phase === 'fresh' || carried.current) reloadLoadedAt.current = loadedAt
+                  // The held old page goes with the first snapshot taken after this load.
+                  setSwap((s) => (s && s.view.loadedAt === null ? { ...s, view: { ...s.view, loadedAt } } : s))
+                  // The inspector posts its first snapshot on its own — possibly before this event,
+                  // which has just cleared it. Ask once more, so a snapshot always follows a load.
+                  web.capture()
+                }}
+              />
+            ),
+          )
         ) : (
           <Blank icon={<IconGlobe size={18} />} title={t('empty.title')}>
             <p className="blank__text">{t('empty.text')}</p>
@@ -1499,7 +1551,11 @@ export function App() {
               key={chat ? 'chat' : 'palette'}
               style={
                 floatPos
-                  ? { left: floatPos.x, top: floatPos.y, maxHeight: chat ? Math.min(480, canvasBox.h - 24) : canvasBox.h - 24 }
+                  ? {
+                      left: floatPos.x,
+                      top: floatPos.y,
+                      maxHeight: chat ? Math.min(480, floatPos.maxH ?? canvasBox.h - 24) : canvasBox.h - 24,
+                    }
                   : { visibility: 'hidden' }
               }
             >

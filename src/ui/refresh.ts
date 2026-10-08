@@ -70,6 +70,58 @@ export function overridesHandedOver(overrides: Readonly<Record<NodeId, Override>
   return out
 }
 
+/**
+ * The web frames to render, in DOM order. A refresh the window starts itself loads the page
+ * into a new iframe and keeps the old one (`held`) on screen over it until the new page has
+ * reported its first snapshot: a reused iframe paints white between two documents, a fresh
+ * one is white until its first paint. The held frame comes last, so it covers the new one
+ * without a z-index (which would also lift it over the overlay), and the new frame is always
+ * inserted before it — an iframe that is moved in the DOM reloads.
+ */
+export function frameStack(current: number, held: number | null): Array<{ key: number; held: boolean }> {
+  const out = [{ key: current, held: false }]
+  if (held !== null && held !== current) out.push({ key: held, held: true })
+  return out
+}
+
+/** The old page held on screen during a refresh, as the window drew it when the reload began. */
+export interface HeldView<S, O> {
+  snapshot: S | null
+  overrides: O
+  /** When the new frame fired `load`; null while it is still loading. */
+  loadedAt: number | null
+}
+
+/**
+ * What the overlay draws, and whether the old frame is still held on screen.
+ *
+ * The boxes must match the picture. While the old page is held, the picture is the old
+ * document with its live edits (a dragged element sits where it was dragged), so the overlay
+ * draws the snapshot and edits saved when the reload began — not the live state: the new
+ * frame's `load` empties the live edits and the snapshot long before the new page is
+ * painted with its own. The hold ends with the first snapshot taken after that `load`, and
+ * the same value switches both: the frame stack drops the old page and the overlay takes
+ * the new boxes in one render, so no frame shows one without the other.
+ */
+export function overlaySource<S extends { createdAt: number }, O>(
+  held: HeldView<S, O> | null,
+  live: { snapshot: S | null; overrides: O },
+): { snapshot: S | null; overrides: O; holding: boolean } {
+  const newPageIn = held !== null && held.loadedAt !== null && live.snapshot !== null && live.snapshot.createdAt >= held.loadedAt
+  if (held && !newPageIn) return { snapshot: held.snapshot, overrides: held.overrides, holding: true }
+  return { snapshot: live.snapshot, overrides: live.overrides, holding: false }
+}
+
+/**
+ * "Connecting inspector…" (and the loading bar) mean the window has no live page: the
+ * first load, a page the user opened, a page that went away. During a refresh the window
+ * started itself the old page stays on screen until the new one is in, so there is nothing
+ * to announce — and a one-frame flash of it is noise in the middle of the agent's reply.
+ */
+export function showsConnecting(s: { url: string; connected: boolean; silent: boolean; swapping: boolean }): boolean {
+  return Boolean(s.url) && !s.connected && !s.silent && !s.swapping
+}
+
 export interface CarriedOverride {
   override: Override
   /** Where the edit was, in the page that is about to go away. */

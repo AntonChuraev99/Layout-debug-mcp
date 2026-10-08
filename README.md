@@ -1,5 +1,6 @@
 # layout-debug-mcp
 
+[![Release](https://img.shields.io/github/v/release/AntonChuraev99/Layout-debug-mcp?include_prereleases)](https://github.com/AntonChuraev99/Layout-debug-mcp/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-22.12%2B%20%7C%2020.19%2B-brightgreen.svg)](https://nodejs.org)
 [![Status](https://img.shields.io/badge/status-pre--1.0-orange.svg)](#roadmap)
@@ -10,7 +11,7 @@ Tired of screenshotting UI, circling a button and describing it to your AI agent
 
 [![layout-debug-mcp: select a card, drag it, ask the agent, the frame refreshes with the change](./.github/media/hero.gif)](./.github/media/hero.mp4)
 
-<sub>20-second loop recorded from the real tool. [Watch the MP4](./.github/media/hero.mp4) for full quality.</sub>
+<sub>18-second loop recorded from the real tool. [Watch the MP4](./.github/media/hero.mp4) for full quality.</sub>
 
 [Русская версия](./README.ru.md)
 
@@ -401,7 +402,7 @@ Later, driven by demand: before/after snapshot diff, a source-location plugin fo
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) and [CHANGELOG.md](./CHANGELOG.md). Bug reports and ideas: [issues](https://github.com/AntonChuraev99/Layout-debug-mcp/issues).
+See [CONTRIBUTING.md](./CONTRIBUTING.md), [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) and [CHANGELOG.md](./CHANGELOG.md). Bug reports and ideas: [issues](https://github.com/AntonChuraev99/Layout-debug-mcp/issues).
 
 ## License
 

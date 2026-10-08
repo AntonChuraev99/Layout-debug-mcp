@@ -3,7 +3,9 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
-## [Unreleased] - 0.1.0
+## [Unreleased]
+
+## [0.1.0] - 2026-10-08
 
 First public release. Install is clone-based (`npm install` + `npm run dev`); one-command install via `npx` and the MCP Registry is planned for 0.2.
 
@@ -55,6 +57,9 @@ First public release. Install is clone-based (`npm install` + `npm run dev`); on
 - `Alt`, `C` and `Esc` stopped working once focus moved into the page; the inspector now forwards them to the window (not while typing in a field).
 - MCP "server is unreachable" now names the address it tried, the network error and the variable the address came from, with a hint for a server started on a custom `LD_SERVER_PORT`. A blank `LD_SERVER_URL` falls back to the port instead of an empty address.
 - `npm run dev` kept running half-started when the server port was taken.
+- The element chat jumped across the screen while it grew; it now stays anchored next to the element.
+- Reloading the frame after the agent's reply flashed a white page and "Connecting inspector…"; the old frame now stays visible until the new one sends its first snapshot.
+- The selection box and the editing blur jumped back to the pre-drag position for one frame when the reloaded frame took over.
 - Killing the dev runner (`scripts/dev.mjs`) outright on Windows instead of pressing Ctrl+C left orphaned node processes holding the ports. The runner now kills whole process trees when it stops, and a detached watchdog takes the runner and its children down when either the runner itself or its parent process (`npm`, or the `cmd`/`sh` it runs the script through) is killed outright — so killing only the `npm` pid no longer leaves vite/tsx holding the ports.
 
 ### Security
@@ -63,3 +68,6 @@ First public release. Install is clone-based (`npm install` + `npm run dev`); on
 - Chat agent writes limited to `projectDir`, excluding `.git/`, `.claude/`, `.mcp.json` and `.env*`; the agent loads project settings only, not user-level ones.
 - Inspector accepts messages only from its parent window, whose origins now follow the configured UI port.
 - Lockfile refreshed with `npm audit fix` (patch / minor bumps of transitive dependencies: fast-uri, hono, ip-address, nanoid, proxy-addr, qs, source-map-js); `npm audit` reports 0 vulnerabilities.
+
+[Unreleased]: https://github.com/AntonChuraev99/Layout-debug-mcp/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/AntonChuraev99/Layout-debug-mcp/releases/tag/v0.1.0

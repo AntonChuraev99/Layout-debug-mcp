@@ -1,7 +1,65 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import type { EditRequest, LayoutNode, Snapshot } from '../shared/protocol.ts'
-import { decideRefresh, overridesHandedOver, reapplyPlan, snapshotFingerprint } from './refresh.ts'
+import { decideRefresh, frameStack, overlaySource, overridesHandedOver, reapplyPlan, showsConnecting, snapshotFingerprint } from './refresh.ts'
+
+describe('frameStack', () => {
+  test('one frame when nothing is held', () => {
+    assert.deepEqual(frameStack(3, null), [{ key: 3, held: false }])
+  })
+  test('the new frame first, the old page held after it (it covers the new one without a z-index)', () => {
+    assert.deepEqual(frameStack(4, 3), [
+      { key: 4, held: false },
+      { key: 3, held: true },
+    ])
+  })
+  test('the same key is never rendered twice', () => {
+    assert.deepEqual(frameStack(4, 4), [{ key: 4, held: false }])
+  })
+})
+
+describe('overlaySource: what the overlay draws while the old page is held over the reloaded one', () => {
+  const oldSnap = { id: 'old', createdAt: 1000 }
+  const newSnap = { id: 'new', createdAt: 2600 }
+  const dragged: Record<string, { nodeId: string; dx: number; dy: number }> = { n1: { nodeId: 'n1', dx: 0, dy: 140 } }
+  const held = (loadedAt: number | null) => ({ snapshot: oldSnap, overrides: dragged, loadedAt })
+
+  test('nothing held: the live snapshot and live edits', () => {
+    assert.deepEqual(overlaySource(null, { snapshot: newSnap, overrides: {} }), { snapshot: newSnap, overrides: {}, holding: false })
+  })
+  test('new frame still loading: the old page with its live edits, although the live state still has the old snapshot', () => {
+    assert.deepEqual(overlaySource(held(null), { snapshot: oldSnap, overrides: dragged }), { snapshot: oldSnap, overrides: dragged, holding: true })
+  })
+  test('new frame loaded, its snapshot not in yet: still the old page WITH the drag (the reload cleared the live edits)', () => {
+    const v = overlaySource(held(2500), { snapshot: null, overrides: {} })
+    assert.equal(v.holding, true)
+    assert.equal(v.snapshot, oldSnap)
+    assert.deepEqual(v.overrides, dragged)
+  })
+  test('a snapshot older than the load is the page that went away: still held', () => {
+    const v = overlaySource(held(2500), { snapshot: oldSnap, overrides: {} })
+    assert.equal(v.holding, true)
+    assert.deepEqual(v.overrides, dragged)
+  })
+  test('the new page reported in: its boxes and the end of the hold come together', () => {
+    assert.deepEqual(overlaySource(held(2500), { snapshot: newSnap, overrides: {} }), { snapshot: newSnap, overrides: {}, holding: false })
+  })
+})
+
+describe('showsConnecting', () => {
+  const base = { url: 'http://localhost:5173', connected: false, silent: false, swapping: false }
+  test('a page without a live inspector yet: connecting', () => {
+    assert.equal(showsConnecting(base), true)
+  })
+  test('a refresh the window started itself: the old page is on screen, nothing to announce', () => {
+    assert.equal(showsConnecting({ ...base, swapping: true }), false)
+  })
+  test('connected, silent, or no page at all: not connecting', () => {
+    assert.equal(showsConnecting({ ...base, connected: true }), false)
+    assert.equal(showsConnecting({ ...base, silent: true }), false)
+    assert.equal(showsConnecting({ ...base, url: '' }), false)
+  })
+})
 
 function n(id: string, path: string, extra: Partial<LayoutNode> = {}): LayoutNode {
   return {
