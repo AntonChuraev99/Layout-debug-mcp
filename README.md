@@ -5,13 +5,15 @@
 [![Node](https://img.shields.io/badge/node-22.12%2B%20%7C%2020.19%2B-brightgreen.svg)](https://nodejs.org)
 [![Status](https://img.shields.io/badge/status-pre--1.0-orange.svg)](#roadmap)
 
-**Click the element. Drag it. Your agent knows exactly which one.**
+**Point at the element. Tell your agent what to change.**
 
-Tired of screenshotting UI, circling a button and describing it to your AI agent in words? Point at it instead. Select any layer in your running page or Android app, move it on the real screen, and send the change to your agent together with the element's anchors, box, parents and the measured delta.
+Stop describing UI to your AI agent in words. `Alt`+click any layer in your running page or Android app and type the change in its chat. Your agent (Claude Code, Codex, Cursor, Copilot…) gets the element's anchors, box and parents over MCP, edits the code and answers in the same chat while the frame refreshes with the result.
 
-[![layout-debug-mcp: select a card, drag it, ask the agent, the frame refreshes with the change](./.github/media/hero.gif)](./.github/media/hero.mp4)
+Need it 16 px lower? Drag it on the real screen first; the measured delta goes along.
 
-<sub>18-second loop recorded from the real tool. [Watch the MP4](./.github/media/hero.mp4) for full quality.</sub>
+[![layout-debug-mcp: select a button, write to your agent in the element chat, the agent edits the code and replies in the same chat, the frame refreshes with the change](./.github/media/hero.gif)](./.github/media/hero.mp4)
+
+<sub>20-second loop recorded from the real tool; the agent's side is a scripted MCP client, its wait sped up 2×. [Watch the MP4](./.github/media/hero.mp4) for full quality.</sub>
 
 [Русская версия](./README.ru.md)
 
@@ -32,11 +34,11 @@ Web has precedents (Onlook, LocatorJS, code-inspector). Selecting any Compose la
 
 ## Features
 
+- **Chat with your agent about an element.** Each element has its own chat thread. Whatever agent you use (Claude Code, Codex, Cursor, Copilot, Gemini CLI…) listens to the window over MCP: you write in the element chat, it edits the code and replies in the same chat. Keep going in the thread until it looks right.
+- **The agent knows which element.** A message carries the element's artifacts: anchors (`file:line`, test id, id, class string, text), box, parent chain, siblings, and your live tweaks as a measured delta in `dp` / `css-px` with box before and after.
+- **Watch it happen.** A shimmer covers the element while the agent works. When the agent replies, the window refreshes the frame on its own, restores your selection and re-applies your other live edits.
 - **Select any layer.** Hover highlights the tightest box under the cursor, click selects. Breadcrumbs go up to parents, "Details" goes down to children. Works on wrappers and containers, not only on accessible nodes.
 - **Live edit.** Drag to move, corner handle to resize, hide and show. On the web it's inline styles; on Android the override is applied to the running composition.
-- **Hand-off to your agent.** Each element has its own chat thread. A message carries the element's artifacts: anchors (`file:line`, test id, id, class string, text), box, parent chain, siblings, and your live tweaks as a measured delta in `dp` / `css-px` with box before and after.
-- **Your agent answers in the window.** Whatever agent you use (Claude Code, Codex, Cursor, Copilot, Gemini CLI…) listens to the window over MCP: you write in the element chat, it edits the code and replies in the same chat.
-- **Watch it happen.** A shimmer covers the element while the agent works. When the agent replies, the window refreshes the frame on its own, restores your selection and re-applies your other live edits.
 - **Inbox.** Every request with its status (Queued, Agent editing, Done, Error) and time, plus replies that aren't tied to an element.
 - **Light install.** `npx -y layout-debug-mcp` downloads only this package: no agent runtime, no model SDK.
 - **English and Russian UI**, switchable in the header.
