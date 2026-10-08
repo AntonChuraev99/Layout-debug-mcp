@@ -1,28 +1,26 @@
-# Сдвинутый элемент: боксы потомков, «призрак», позиция указателя на Alt
+# Moved element: child boxes, the ghost copy, pointer position on Alt
 
-**Статус:** Done
+Date: 2026-10-07.
 
-Дата: 2026-10-07. Ветка `worktree-palette-inline-chat`.
+## 1. After a move, selection used the old place
 
-## 1. После сдвига выбор показывал старое место
+**Symptom.** After an element is moved, its children's boxes are drawn at the old place, and a click on the new place selects the parent.
 
-**Симптом.** После сдвига элемента рамка его потомков рисуется на старом месте, клик по новому месту выбирает родителя.
+**Cause.** The inspector measures the snapshot with moves removed, while the parent's `translate` carries the whole subtree. The overlay (`src/ui/Overlay.tsx`) added only the node's own override.
 
-**Корень.** Инспектор измеряет снапшот с убранными сдвигами, а `translate` родителя уносит всё поддерево. Оверлей (`src/ui/Overlay.tsx`) добавлял к боксу только собственный override узла.
+**Fix.** `inheritedShifts()` in `src/ui/pick.ts` sums ancestor moves; hit test, boxes, labels and the off-screen check in `src/ui/App.tsx` use it. Tests: e2e `4c` in `tests/e2e/live-edit.spec.ts`, unit `src/ui/pick.test.ts`.
 
-**Решение.** `inheritedShifts()` в `src/ui/pick.ts` суммирует сдвиги предков; её используют хит-тест, рамки, метки и проверка «за экраном» в `src/ui/App.tsx`. Red-репро — e2e `4c` в `tests/e2e/live-edit.spec.ts`, unit — `src/ui/pick.test.ts`.
+**Open for Android.** Correct only if the on-device agent reports boxes without moves (not verified on a device); otherwise children move twice after a recapture.
 
-**Открыто для Android.** Логика верна, только если агент на устройстве отдаёт координаты без сдвигов (не проверено — агент в целевом приложении, устройства нет). Иначе дети после пересъёма уедут вдвое.
+## 2. Ghost copy at the old place
 
-## 2. «Призрак» на старом месте
+- **Web** (`src/inspector/index.ts`, `src/inspector/ghost.ts`): a copy in a layer outside `<body>`, so snapshot, hit test and DOM watching do not see it; `class`, `id`, `data-*` and ARIA are stripped; clipped by scrolling ancestors. e2e `4d`, `4e`.
+- **Android** (`frameCropRect` in `src/ui/geometry.ts`): a crop of the frame at the original bounds; waits for `img.decode()` if the frame is still decoding. Not verified on a device.
 
-- **Web** (`src/inspector/index.ts`, `src/inspector/ghost.ts`): копия в слое вне `<body>` — её не видят снапшот, хит-тест и слежение за DOM. `class`, `id`, `data-*` и ARIA сняты. Обрезается `clip-path` по прокручиваемым предкам. e2e `4d`, `4e`.
-- **Android** (`frameCropRect` в `src/ui/geometry.ts`): кроп кадра по исходным границам; если кадр ещё декодируется, ждёт `img.decode()` того же `src`, иначе видимая заметка в шапке. На устройстве не проверено.
+## 3. Pointer position when Alt is pressed
 
-## 3. Позиция указателя на нажатие Alt
+**Symptom.** e2e `3d2` was flaky: on Alt with a still mouse, the highlight sometimes did not appear.
 
-**Симптом.** e2e `3d2` нестабилен: на Alt при неподвижной мыши подсветки иногда нет.
+**Cause.** On Alt the overlay takes the mouse over the iframe; Chromium re-checks the element under the pointer, and the page gets `pointerleave` inside its viewport. The inspector reset the position and lost the race with the window's request.
 
-**Корень.** По Alt оверлей забирает мышь над iframe, Chromium перепроверяет элемент под указателем, и страница получает `pointerleave` внутри своего viewport. Инспектор сбрасывал позицию и проигрывал гонку с запросом окна.
-
-**Решение.** Инспектор сбрасывает позицию только при уходе через край viewport. Уход на палитру (карточка окна поверх iframe) тоже внутри viewport, поэтому окно само помнит, что указатель над его карточками (`pointerover` в capture, ref `pointerOnChrome` в `src/ui/Overlay.tsx`), и игнорирует ответ инспектора. `elementFromPoint` не помогает: устаревшая точка лежит на странице рядом с карточкой. e2e `2e`, `2f`.
+**Fix.** The inspector resets the position only when the pointer leaves through the viewport edge. The window tracks whether the pointer is over its own cards (`pointerOnChrome` in `src/ui/Overlay.tsx`) and ignores the inspector's answer then. e2e `2e`, `2f`.

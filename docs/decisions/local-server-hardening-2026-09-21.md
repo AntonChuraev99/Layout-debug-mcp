@@ -1,37 +1,31 @@
 ---
-title: "Граница доверия локального сервера и чат-агента"
-summary: "Любая открытая вкладка могла через WebSocket управлять агентом с правом записи. Закрыто: bind 127.0.0.1, Host/Origin/Sec-Fetch-Site, PreToolUse-хук на запись, origin-allowlist в инспекторе."
+title: "Trust boundary of the local server and the chat agent"
 date: 2026-09-21
 type: decision
-modules: [server, inspector, agent]
-keywords: [permission, dns-rebinding, websocket-origin, cors, PreToolUse, canUseTool, claude-agent-sdk, postMessage, loopback, web, android]
-project: layout-debug-mcp
+keywords: [dns-rebinding, websocket-origin, cors, PreToolUse, claude-agent-sdk, postMessage, loopback]
 ---
 
-# Граница доверия локального сервера и чат-агента
+# Trust boundary of the local server and the chat agent
 
-**Суть:** все проверки заголовков — чистые функции в `src/server/security.ts`, запись агента режет PreToolUse-хук `toolGuard` в `src/server/agent.ts`. Новый эндпоинт или инструмент агента проходит через них, иначе граница дырявая.
+## Context
 
-## Проблема / Контекст
+The server listened on all interfaces, the WebSocket did not check `Origin`, and responses carried `Access-Control-Allow-Origin: *`. Any open tab could connect to `ws://localhost:5175/ws`, send `submit`, and make the chat agent write files in `projectDir`.
 
-Сервер слушал все интерфейсы, WebSocket не проверял `Origin`, на ответах стоял `Access-Control-Allow-Origin: *`. Страница evil.com открывала `ws://localhost:5175/ws`, слала `submit`, и чат-агент с `Write`/`Edit` менял файлы в `projectDir` — код исполнялся на следующем `npm run dev`.
+## Decision
 
-## Решение
+- Listen on `127.0.0.1`; default addresses use `127.0.0.1`, not `localhost`.
+- `checkHost`: loopback host names on the tool's ports only (DNS rebinding). The window port is allowed too: the Vite proxy forwards `/ws` without `changeOrigin`.
+- `checkOrigin`: no `Origin` (MCP, curl) or one of `UI_ORIGINS`; `/api/*` also rejects `Sec-Fetch-Site: cross-site | same-site`.
+- WebSocket upgrade goes through `checkWsUpgrade`; a refusal is a 403 plus a log line.
+- Agent writes go through `checkWritePath` in a PreToolUse hook: real path inside `projectDir`, no `..`, `.git`, `.claude`, `.mcp.json`, `.env*`. Tools outside `ALLOWED_TOOLS` are denied. `settingSources: ['project']` keeps user-level settings out of the agent.
+- The inspector accepts messages only from `window.parent` with an origin from `UI_ORIGINS` and posts only there.
 
-- `listen(SERVER_PORT, '127.0.0.1')`; адреса по умолчанию — `127.0.0.1`, не `localhost`.
-- `checkHost`: только loopback-имя с портом 5175 или 5174 — от DNS rebinding.
-- `checkOrigin`: Origin отсутствует (MCP, curl) или из `UI_ORIGINS`.
-- `/api/*` дополнительно режет `Sec-Fetch-Site: cross-site | same-site`.
-- WebSocket — `verifyClient` с `checkWsUpgrade`; отказ — 403 и строка в лог.
-- Запись агента — `checkWritePath`: realpath внутри `projectDir`, без `..`, `.git`, `.claude`, `.mcp.json`, `.env*`; инструменты вне `ALLOWED_TOOLS` запрещены; `settingSources: ['project']` — пользовательские настройки в агент не грузятся.
-- Инспектор принимает сообщения только от `window.parent` с origin из `UI_ORIGINS` и шлёт только туда.
+## Why this way
 
-## Почему именно так
+- `canUseTool` is not called for tools listed in `allowedTools`; a PreToolUse deny wins over any allow.
+- Without `settingSources` the SDK loads every source, so the agent could write a command hook into the target project's Claude Code settings file.
+- `event.source` alone is not enough: a site that embeds the dev page becomes `window.parent` itself.
 
-`canUseTool` не зовётся для инструментов из `allowedTools` (источник: `sdk.d.ts` 0.3.220); отказ PreToolUse-хука сильнее любого allow. Без `settingSources` грузятся все источники — агент мог записать command-хук в `.claude/settings.json` (нашло ревью гейта). 5174 в `ALLOWED_HOSTS`: прокси Vite шлёт `/ws` без `changeOrigin`. `event.source` мало: встроивший dev-страницу сайт сам становится `window.parent`. `127.0.0.1`: у автора `[::1]:5175` занимал чужой Vite.
+## Rule
 
-## Связанные файлы
-
-- `src/server/security.ts`, `src/server/security.test.ts`
-- `src/server/index.ts`, `src/server/agent.ts`, `src/inspector/index.ts`, `src/shared/ports.ts`
-- `SECURITY.md` — модель угроз и известные пробелы
+Every new endpoint or agent tool goes through `src/server/security.ts` and the `toolGuard` hook in `src/server/agent.ts`. Threat model and known gaps: `SECURITY.md`.
