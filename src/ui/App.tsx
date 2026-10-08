@@ -198,7 +198,6 @@ export function App() {
   const [bannerHidden, setBannerHidden] = useState(false)
 
   const [selectedId, setSelectedId] = useState<NodeId | null>(null)
-  const [pipette, setPipette] = useState(false)
   /** The palette's arrow-key row: Move or Resize, at most one. */
   const [nudge, setNudge] = useState<NudgeKind | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -792,15 +791,9 @@ export function App() {
   const tweakBlocked = isAndroid && !state.online ? t('blocked.offlineMove') : null
   const hideBlocked = isAndroid ? t('blocked.hideAndroid') : null
 
-  // --- picking: Alt held or the pipette on (web); Android selects by a plain click too ---
+  // --- picking: Alt held (web); Android selects by a plain click too ---
   const toolsBlocked = !snapshot ? (isAndroid ? t('blocked.needDevice') : t('blocked.needPage')) : null
-  const pipetteOn = pipette && !isAndroid && Boolean(snapshot)
-  const picking = Boolean(snapshot) && (alt.down || pipetteOn)
-
-  // The pipette is for one pick of this page; another page or target turns it off.
-  useEffect(() => {
-    if (!snapshot || isAndroid) setPipette(false)
-  }, [snapshot, isAndroid])
+  const picking = Boolean(snapshot) && alt.down
 
   // The inspector hides boxes only for scrolls that move the selected element (DESIGN_SPEC §9),
   // so it needs to know which one that is.
@@ -821,8 +814,7 @@ export function App() {
 
   /**
    * A pick gesture finished. `empty`: it landed on no layer (the selection went, nothing new
-   * was picked) — the Alt release is still not a bare tap, but the pipette stays on for a
-   * real pick, and nothing counts as learned.
+   * was picked) — the Alt release is still not a bare tap, but nothing counts as learned.
    */
   const onPicked = useCallback(
     (source: PickSource, empty = false) => {
@@ -832,7 +824,6 @@ export function App() {
         if (!isAndroid) web.notifyPicked()
       }
       if (empty) return
-      if (source === 'pipette') setPipette(false)
       // The hint folds only on web; Android shows no cap to fold to (DESIGN_SPEC §8).
       if (source === 'alt' && !isAndroid) writeStorage(ALT_PICKS_KEY, String(readNumber(ALT_PICKS_KEY) + 1))
       if (!coachSeen) closeCoach()
@@ -1053,7 +1044,7 @@ export function App() {
       const el = e.target instanceof HTMLElement ? e.target : null
       const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
       if (e.key === 'Escape') {
-        switch (escapeStep({ coach: coachOpen, chat: Boolean(chat), details: detailsOpen, nudge: nudge !== null, pipette: pipetteOn, selected: Boolean(selectedId) })) {
+        switch (escapeStep({ coach: coachOpen, chat: Boolean(chat), details: detailsOpen, nudge: nudge !== null, selected: Boolean(selectedId) })) {
           case 'coach':
             return closeCoach()
           case 'chat':
@@ -1062,8 +1053,6 @@ export function App() {
             return setDetailsOpen(false)
           case 'nudge':
             return closeNudge()
-          case 'pipette':
-            return setPipette(false)
           case 'selection':
             return selectNode(null)
           default:
@@ -1338,12 +1327,10 @@ export function App() {
     <div className="app">
       <Header
         pick={{
-          pipette: pipetteOn,
-          alt: picking && alt.down,
+          alt: picking,
           blocked: toolsBlocked,
           compact: learned && !isAndroid,
           mac: IS_MAC,
-          onPipette: () => setPipette((v) => !v),
         }}
         coach={coachOpen ? { onClose: closeCoach } : null}
         t={t}
@@ -1491,7 +1478,6 @@ export function App() {
             overrides={overrides}
             selectedId={selectedId}
             alt={alt.down}
-            pipette={pipetteOn}
             clickSelects={isAndroid}
             canTweak={!tweakBlocked}
             scale={device.scale}

@@ -11,7 +11,6 @@ import {
   hoverBox,
   openWindow,
   palette,
-  pipetteButton,
   selectedBox,
   selectInFrame,
   serveDir,
@@ -322,26 +321,6 @@ test('3d4 a scrolling ticker elsewhere on the page does not hide the palette', a
   })
   await frameOf(page).locator('html').evaluate(() => window.scrollBy(0, 40))
   await expect.poll(() => page.evaluate(() => (window as unknown as { staleSeen: boolean }).staleSeen)).toBe(true)
-})
-
-test('3e the pipette selects one layer and switches itself off; Escape cancels it', async ({ page }) => {
-  await openWindow(page)
-  const counterPage = frameOf(page)
-  const pipette = pipetteButton(page)
-  await pipette.click()
-  await expect(pipette).toHaveAttribute('aria-pressed', 'true')
-  await page.keyboard.press('Escape')
-  await expect(pipette).toHaveAttribute('aria-pressed', 'false')
-
-  await pipette.click()
-  const c = await centerOf(counterPage.getByTestId('cta-continue'))
-  await page.mouse.click(c.x, c.y)
-  await expect(palette(page)).toHaveAccessibleName(/^Actions: button/)
-  await expect(pipette).toHaveAttribute('aria-pressed', 'false')
-  // Back to the live page: the next plain click is the page's (no hover, no new pick).
-  const title = await centerOf(counterPage.getByRole('heading', { name: 'Годовая подписка' }))
-  await page.mouse.move(title.x, title.y)
-  await expect(hoverBox(page)).toHaveCount(0)
 })
 
 test('3f Alt+click on a link inside the focused page selects it and downloads nothing', async ({ page }) => {

@@ -250,13 +250,13 @@ describe('frameCropRect', () => {
 })
 
 describe('escapeStep', () => {
-  const none = { coach: false, chat: false, details: false, nudge: false, pipette: false, selected: false }
-  it('closes chat → details → nudge → pipette → selection, one per press', () => {
-    const all = { coach: false, chat: true, details: true, nudge: true, pipette: true, selected: true }
+  const none = { coach: false, chat: false, details: false, nudge: false, selected: false }
+  it('closes chat → details → nudge → selection, one per press', () => {
+    const all = { coach: false, chat: true, details: true, nudge: true, selected: true }
     assert.equal(escapeStep(all), 'chat')
     assert.equal(escapeStep({ ...all, chat: false }), 'details')
     assert.equal(escapeStep({ ...all, chat: false, details: false }), 'nudge')
-    assert.equal(escapeStep({ ...all, chat: false, details: false, nudge: false }), 'pipette')
+    assert.equal(escapeStep({ ...all, chat: false, details: false, nudge: false }), 'selection')
     assert.equal(escapeStep({ ...none, selected: true }), 'selection')
     assert.equal(escapeStep(none), null)
   })

@@ -189,13 +189,12 @@ There are no modes: on the web the page stays live, so clicks, scrolling and typ
 | Hold `Alt` (`⌥ Option` on macOS) | Highlights the tightest box under the cursor; the hint in the header lights up and a "Select to chat" bubble appears next to the cursor |
 | `Alt`+click | Selects the layer and opens its action palette. Another `Alt`+click on the same spot goes up to the parent |
 | `Alt`+wheel | Up to the parent / back down to the tightest layer under the cursor |
-| Pipette (header) | Picks one layer without a key, then turns itself off |
 | Drag the selected layer | Moves the element **in the page / on the device**; corner handles resize. A layer covering most of the frame is dragged by its label, so the page under it stays clickable |
 | `Esc` or ✕ in the palette | Clears the selection |
 
 Clicks outside the selected layer go to the page and keep the selection. On Android the window can't send clicks to the device yet, so a plain hover highlights and a plain click selects.
 
-With the frame focused: `Enter` goes down to the first child, `Shift+Enter` up to the parent, `Tab` / `Shift+Tab` to siblings. `Esc` closes the first-run hint, the chat, Details, arrow nudging and the pipette in turn, then clears the selection. Shortcuts also work with a non-Latin keyboard layout.
+With the frame focused: `Enter` goes down to the first child, `Shift+Enter` up to the parent, `Tab` / `Shift+Tab` to siblings. `Esc` closes the first-run hint, the chat, Details and arrow nudging in turn, then clears the selection. Shortcuts also work with a non-Latin keyboard layout.
 
 On the web the header also has a **Page address** field: paste any dev server URL and press Open.
 

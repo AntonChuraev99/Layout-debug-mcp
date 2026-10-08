@@ -270,7 +270,7 @@ kbd {
   }
 }
 
-/* Pick group: pipette + the always-on "Alt · hover to inspect · click to select" hint. */
+/* Pick group: the always-on "Alt · hover to inspect · click to select" hint. */
 .pick-anchor {
   position: relative;
   display: flex;
@@ -279,7 +279,6 @@ kbd {
 .pick {
   display: flex;
   align-items: center;
-  gap: 2px;
   padding: 2px;
   background: var(--surface-0);
   border: 1px solid var(--line);
@@ -291,7 +290,9 @@ kbd {
   align-items: center;
   gap: 7px;
   height: 32px;
-  padding: 0 10px 0 7px;
+  /* The hint is alone in its frame: 8px before the cap's hard edge and 10px after the
+     text's soft one read as the same gap (measured 10.5 / 12 css px to the frame). */
+  padding: 0 10px 0 8px;
   border-radius: var(--r-sm);
   font-size: 12px;
   line-height: 16px;
@@ -299,18 +300,9 @@ kbd {
   white-space: nowrap;
   transition: background-color 80ms linear, color 80ms linear, box-shadow 80ms linear;
 }
-/* Every text sits in one grid cell; the hidden ones keep the width (no jump of the URL bar). */
 .pick__stack,
 .pick__kap > span {
   display: grid;
-}
-.pick__stack > *,
-.pick__kap > * {
-  grid-area: 1 / 1;
-}
-.pick__stack > .is-off,
-.pick__kap > .is-off {
-  visibility: hidden;
 }
 .pick__kap {
   display: inline-grid;
@@ -413,31 +405,6 @@ kbd {
 .coach__ok {
   align-self: flex-end;
   margin-top: 8px;
-}
-
-.tool {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--r-sm);
-  color: var(--fg-2);
-}
-.tool:hover {
-  background: var(--surface-2);
-  color: var(--fg);
-}
-.tool[aria-pressed='true'] {
-  background: var(--ink-soft);
-  box-shadow: inset 0 0 0 1px rgba(224, 57, 143, 0.38);
-  color: var(--ink-fg);
-}
-.tool[aria-disabled='true'] {
-  color: var(--fg-3);
-  opacity: 0.55;
-  cursor: default;
-  background: none;
-  box-shadow: none;
 }
 
 .tipwrap {
@@ -1235,7 +1202,7 @@ kbd {
 
 /* --- overlay --------------------------------------------------------------- */
 
-/* Selection edge: the frame belongs to the overlay while Alt is held or the pipette is on. */
+/* Selection edge: the frame belongs to the overlay while Alt is held. */
 .canvas--picking::after {
   content: '';
   position: absolute;

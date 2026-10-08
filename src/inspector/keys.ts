@@ -5,7 +5,7 @@
  * press goes to the page's document, not to the window. The window's own shortcuts would
  * silently stop working, so the inspector hands a few keys back:
  * - `c` — chat with the selected layer;
- * - `Escape` — the window's Escape stack (chat → details → nudge → pipette → selection).
+ * - `Escape` — the window's Escape stack (chat → details → nudge → selection).
  *   Forwarded, never swallowed: the page may close its own modal with it;
  * - arrows — only while the palette's nudge row is on (the window tells the inspector).
  *

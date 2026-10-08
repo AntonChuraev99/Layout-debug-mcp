@@ -27,6 +27,7 @@ One-command install and one agent entry: whatever agent you connect over MCP ans
 ### Removed
 
 - The built-in chat agent on the Claude Agent SDK, and with it the `@anthropic-ai/claude-agent-sdk` dependency (about 250 MB on install). The window's chat is answered by your MCP agent.
+- The header pipette; pick with Alt (or a plain click on Android).
 
 ### Security
 

@@ -161,7 +161,8 @@ export const selectedBox = (page: Page) => page.locator('.overlay .box--selected
 export const hoverBox = (page: Page) => page.locator('.overlay .box--hover')
 /** Accessible name of the web frame (the window's `main`). */
 export const CANVAS_NAME = 'Frame. Hold Alt and click to select a layer'
-export const pipetteButton = (page: Page) => page.getByRole('button', { name: 'Pick a layer — or hold Alt' })
+/** The header's "Alt · hover to inspect · click to select" hint; its title says why picking is off. */
+export const pickHint = (page: Page) => page.locator('.pick')
 /** The header indicator of listen mode (src/ui/i18n.ts agent.listening / agent.none). */
 export const agentListening = (page: Page) => page.getByRole('button', { name: 'Agent listening', exact: true })
 export const noAgentListening = (page: Page) => page.getByRole('button', { name: 'No agent listening', exact: true })

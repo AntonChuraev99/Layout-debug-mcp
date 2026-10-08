@@ -14,14 +14,12 @@ type Msg = string | Plural
 
 const en = {
   // --- header ---
-  'pick.button': 'Pick a layer — or hold {alt}',
   'pick.hint': 'hover to inspect · click to select',
-  'pick.hintPipette': 'to cancel · click a layer',
   'pick.kapTitle': 'Hold {alt}: hover to inspect, click to select, scroll for the parent layer',
   'pick.kapTitleAndroid': 'Hover to inspect, click to select, scroll with {alt} for the parent layer',
   'pick.top': 'Top layer',
   'coach.title': 'The page works as usual',
-  'coach.text': 'Click, scroll and type right in it. To select a layer, hold {alt} and click it — or use the pipette.',
+  'coach.text': 'Click, scroll and type right in it. To select a layer, hold {alt} and click it.',
   'coach.ok': 'Got it',
   'url.label': 'Page address',
   'url.open': 'Open',
@@ -239,14 +237,12 @@ export type MsgKey = keyof typeof en
 type Shape<T> = { [K in keyof T]: T[K] extends string ? string : RuPlural }
 
 const ru: Shape<typeof en> = {
-  'pick.button': 'Выбрать слой — или зажми {alt}',
   'pick.hint': 'наведи — подсветка · клик — выделить',
-  'pick.hintPipette': 'отмена · кликни по слою',
   'pick.kapTitle': 'Зажми {alt}: наведи — подсветка, клик — выделить, колесо — слой-родитель',
   'pick.kapTitleAndroid': 'Наведи — подсветка, клик — выделить, {alt} + колесо — слой-родитель',
   'pick.top': 'Самый верхний слой',
   'coach.title': 'Страница работает как обычно',
-  'coach.text': 'Кликай, прокручивай и вводи текст прямо в ней. Чтобы выделить слой, зажми {alt} и кликни по нему — или возьми пипетку.',
+  'coach.text': 'Кликай, прокручивай и вводи текст прямо в ней. Чтобы выделить слой, зажми {alt} и кликни по нему.',
   'coach.ok': 'Понятно',
   'url.label': 'Адрес страницы',
   'url.open': 'Открыть',
