@@ -36,6 +36,10 @@ describe('parseUiMessage: refuses frames handlers cannot use', () => {
     assert.equal(parseUiMessage('{}').ok, false)
   })
 
+  test('telemetryNoticeDismissed is accepted', () => {
+    assert.deepEqual(parseUiMessage('{"t":"telemetryNoticeDismissed"}'), { ok: true, msg: { t: 'telemetryNoticeDismissed' } })
+  })
+
   test('bad shapes for snapshot / select / overrides / androidOverride are refused', () => {
     assert.equal(parseUiMessage(JSON.stringify({ t: 'snapshot', snapshot: null })).ok, false)
     assert.equal(parseUiMessage(JSON.stringify({ t: 'snapshot', snapshot: { ...snapshot, nodes: null } })).ok, false)

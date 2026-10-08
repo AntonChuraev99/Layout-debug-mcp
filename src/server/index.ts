@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { SERVER_PORT, UI_PORT, WINDOW_ORIGINS } from '../shared/ports.ts'
 import { serverFailedLine, serverReadyLine } from '../shared/devMarkers.mjs'
 import { DEMO_DIR, INSPECTOR_BUNDLE, PACKAGE_NAME, PACKAGE_VERSION, UI_DIST_DIR } from '../shared/paths.ts'
+import { countBucket, durationBucket, initTelemetry, installCrashHandlers, minutesBucket } from '../shared/telemetry.ts'
 import { parseWaitTimeout, WAIT_MAX_SECONDS, WAIT_MIN_SECONDS } from '../shared/wait.ts'
 import {
   DEFAULT_LOCALE,
@@ -17,6 +18,7 @@ import {
   type PostChatBody,
   type PostChatResponse,
   type ServerToUi,
+  type Snapshot,
   type UiToServer,
   type WaitResponse,
 } from '../shared/protocol.ts'
@@ -42,12 +44,18 @@ const UI_INDEX = join(UI_DIST_DIR, 'index.html')
 /** A chat post or a consume body is a few KB at most; anything larger is a bug or an abuse. */
 const MAX_BODY_BYTES = 256_000
 
+// Anonymous usage telemetry (src/shared/telemetry.ts); its notice and debug lines go to stderr.
+const telemetry = initTelemetry({ process: 'server' })
+installCrashHandlers(telemetry)
+
 let config: Config
 try {
   config = loadConfig()
 } catch (err) {
   // scripts/dev.mjs and open_window both read this line (shared/devMarkers.mjs, the log file).
   console.error(serverFailedLine((err as Error).message.replace(/^\[layout-debug\] /, '')))
+  telemetry.track({ type: 'server_start_failed', reason: 'config_error' })
+  await telemetry.flush()
   process.exit(1)
 }
 
@@ -64,6 +72,30 @@ const clients = new Set<WebSocket>()
 const startedAt = Date.now()
 /** Last moment a window socket was connected (now, while one is). */
 let lastWindowAt = startedAt
+
+/** What this server process saw, for the `server_session_ended` telemetry event (counts only). */
+const usage = {
+  windows: 0,
+  snapshots: 0,
+  selections: 0,
+  liveEdits: 0,
+  editsSent: 0,
+  repliesDone: 0,
+  repliesError: 0,
+  agentListened: false,
+}
+
+/** A snapshot arrived (from the window or the device): counted, and the first one is `target_attached`. */
+function noteSnapshot(snapshot: Snapshot) {
+  usage.snapshots++
+  if (usage.snapshots > 1) return
+  telemetry.track({
+    type: 'target_attached',
+    target: snapshot.target,
+    nodes: countBucket(Object.keys(snapshot.nodes).length),
+    unit: snapshot.unit ?? (snapshot.target === 'android' ? 'dp' : 'css-px'),
+  })
+}
 
 /**
  * Language of window-facing text. Each window reports its own on connect and on
@@ -87,6 +119,7 @@ const hub = new WaitHub({
     broadcast({ t: 'requests', requests: session.requests })
   },
   listeningChanged: (listening) => {
+    if (listening) usage.agentListened = true
     console.log(`[layout-debug] agent ${listening ? 'is listening' : 'stopped listening'}`)
     broadcast({ t: 'agentStatus', listening })
   },
@@ -309,6 +342,7 @@ async function postChat(req: IncomingMessage, res: ServerResponse) {
     return sendJson(res, { error: 'status must be "done" or "error"' }, 400)
   }
 
+  const createdAt = requestId ? session.requests.find((r) => r.id === requestId)?.createdAt : undefined
   const { message, matched } = session.addReply(
     text.trim(),
     role === 'system' ? 'system' : 'assistant',
@@ -317,6 +351,16 @@ async function postChat(req: IncomingMessage, res: ServerResponse) {
   )
   if (requestId && !matched) {
     console.warn(`[layout-debug] reply_in_window named unknown request ${requestId}; delivered as a general message`)
+  }
+  if (requestId) {
+    if (matched && status === 'error') usage.repliesError++
+    else if (matched) usage.repliesDone++
+    telemetry.track({
+      type: 'agent_replied',
+      status: status ?? 'done',
+      matched,
+      ...(createdAt !== undefined ? { latency: durationBucket(Date.now() - createdAt) } : {}),
+    })
   }
   broadcast({ t: 'chat', message })
   if (matched) {
@@ -453,7 +497,7 @@ function serveApi(url: URL, req: IncomingMessage, res: ServerResponse) {
       if (!verdict.ok) return reject(req, res, verdict.reason, true)
       if (!requirePost(req, res, '/api/shutdown')) return
       console.log('[layout-debug] shutdown requested over /api/shutdown')
-      res.once('finish', () => shutdown(0))
+      res.once('finish', () => shutdown(0, 'api_shutdown'))
       return sendJson(res, { ok: true, pid: process.pid })
     }
     default:
@@ -478,6 +522,8 @@ const wss = new WebSocketServer({
 wss.on('error', () => {})
 
 function send(ws: WebSocket, msg: ServerToUi) {
+  // Only the code: the message is page or device text. Repeats are capped per code (telemetry rate guard).
+  if (msg.t === 'error') telemetry.track({ type: 'error_shown', code: msg.code, target: config.target })
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg))
 }
 
@@ -500,6 +546,8 @@ function announceStatus(id: string) {
 wss.on('connection', (ws) => {
   clients.add(ws)
   lastWindowAt = Date.now()
+  usage.windows++
+  if (usage.windows === 1) telemetry.track({ type: 'window_connected', target: config.target })
   ws.on('message', (raw) => onUiMessage(ws, raw))
   ws.on('close', () => {
     clients.delete(ws)
@@ -520,6 +568,7 @@ async function greet(ws: WebSocket) {
     device: config.device,
     deviceModel,
     listening: hub.listening,
+    telemetry: { enabled: telemetry.enabled, showNotice: telemetry.windowNoticePending() },
   })
   send(ws, { t: 'requests', requests: session.requests })
   // Replay the thread so a reloaded window does not come back blank.
@@ -551,12 +600,18 @@ function onUiMessage(ws: WebSocket, raw: unknown) {
     }
     case 'snapshot':
       session.setSnapshot(msg.snapshot)
+      noteSnapshot(msg.snapshot)
       break
     case 'select':
       session.selectedId = msg.nodeId
+      if (msg.nodeId) usage.selections++
       break
     case 'overrides':
       session.overrides = msg.overrides
+      if (msg.overrides.length) usage.liveEdits++
+      break
+    case 'telemetryNoticeDismissed':
+      telemetry.dismissWindowNotice()
       break
     case 'clearRequests':
       session.clearRequests()
@@ -595,6 +650,7 @@ async function captureAndroid(ws: WebSocket) {
   try {
     const snapshot = await android.capture()
     session.setSnapshot(snapshot)
+    noteSnapshot(snapshot)
     androidFrame++
     broadcast({ t: 'androidSnapshot', snapshot, frame: androidFrame })
   } catch (err) {
@@ -608,6 +664,7 @@ async function captureAndroid(ws: WebSocket) {
 
 async function applyAndroidOverride(ws: WebSocket, override: Override) {
   if (!android) return
+  usage.liveEdits++
   try {
     await android.setOverride(override)
   } catch (err) {
@@ -658,6 +715,14 @@ function handleSubmit(ws: WebSocket, comment: string) {
     broadcast({ t: 'chat', message })
   }
 
+  usage.editsSent++
+  telemetry.track({
+    type: 'edit_sent',
+    target: request.target,
+    agent_listening: hub.listening,
+    has_live_edits: request.overrides.length > 0,
+    has_comment: comment.trim().length > 0,
+  })
   post({ id: requestId, role: 'user', text: comment, requestId })
   // buildRequest starts every request `queued`; windows learn it from this frame and
   // from the explicit status event, the same way as every later transition.
@@ -673,16 +738,30 @@ function handleSubmit(ws: WebSocket, comment: string) {
 // --- lifecycle --------------------------------------------------------------
 
 let shuttingDown = false
-function shutdown(code: number) {
+function shutdown(code: number, reason: 'idle' | 'signal' | 'api_shutdown') {
   if (shuttingDown) return
   shuttingDown = true
+  telemetry.track({
+    type: 'server_session_ended',
+    reason,
+    duration: minutesBucket(Date.now() - startedAt),
+    windows: countBucket(usage.windows),
+    snapshots: countBucket(usage.snapshots),
+    selections: countBucket(usage.selections),
+    live_edits: countBucket(usage.liveEdits),
+    edits_sent: countBucket(usage.editsSent),
+    replies_done: countBucket(usage.repliesDone),
+    replies_error: countBucket(usage.repliesError),
+    agent_listened: usage.agentListened,
+  })
   hub.close()
   for (const ws of clients) ws.terminate()
   wss.close()
   http.close()
   http.closeAllConnections?.()
-  // Let the last log line and response flush.
-  setTimeout(() => process.exit(code), 50).unref()
+  process.exitCode = code
+  // Let the last log line and response flush; telemetry gets at most its flush deadline.
+  void telemetry.flush().then(() => setTimeout(() => process.exit(code), 50).unref())
 }
 
 /** Started by open_window: no window and no waiting agent for this long → exit. */
@@ -693,13 +772,13 @@ if (config.idleExitMs > 0) {
     const lastActive = Math.max(startedAt, lastWindowAt, hub.lastActiveAt)
     if (Date.now() - lastActive < idleMs) return
     console.log(`[layout-debug] no window and no agent for ${Math.round(idleMs / 60_000)} min, exiting`)
-    shutdown(0)
+    shutdown(0, 'idle')
   }, Math.min(60_000, Math.max(1_000, Math.floor(idleMs / 4))))
   timer.unref()
 }
 
-process.on('SIGINT', () => shutdown(0))
-process.on('SIGTERM', () => shutdown(0))
+process.on('SIGINT', () => shutdown(0, 'signal'))
+process.on('SIGTERM', () => shutdown(0, 'signal'))
 
 /** What answers on our port, if it is a layout-debug server. */
 async function probeOwnServer(): Promise<HealthResponse | null> {
@@ -740,6 +819,11 @@ http.on('error', async (err: NodeJS.ErrnoException) => {
         : err.message
   // scripts/dev.mjs and open_window watch for this line (shared/devMarkers.mjs).
   console.error(serverFailedLine(why))
+  telemetry.track({
+    type: 'server_start_failed',
+    reason: err.code === 'EADDRINUSE' ? 'port_in_use' : err.code === 'EACCES' ? 'port_access' : 'other',
+  })
+  await telemetry.flush()
   process.exit(1)
 })
 
@@ -761,8 +845,16 @@ http.listen(SERVER_PORT, LISTEN_HOST, async () => {
     if (devices.length > 1 && !config.device) {
       console.warn('[layout-debug] more than one device and LD_DEVICE is not set, adb will pick one')
     }
+    telemetry.track({
+      type: 'server_started',
+      target: 'android',
+      config_file: Boolean(config.configFile),
+      android_devices: countBucket(devices.length),
+      multi_device_no_pick: devices.length > 1 && !config.device,
+    })
   } else {
     console.log(`[layout-debug] target: ${config.targetUrl}`)
+    telemetry.track({ type: 'server_started', target: config.target, config_file: Boolean(config.configFile) })
   }
   console.log(`[layout-debug] project: ${config.projectDir}`)
   console.log(`[layout-debug] config: ${config.configFile ?? 'none (defaults and LD_* variables)'}`)

@@ -56,6 +56,8 @@ before(async () => {
       LD_CONFIG: '',
       LD_DEV: '',
       LD_IDLE_EXIT_MINUTES: '',
+      // Never send telemetry, also when this file runs under plain `node --test`.
+      LD_TELEMETRY: '0',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

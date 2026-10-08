@@ -27,6 +27,24 @@ describe('parseCliArgs', () => {
     assert.deepEqual(parseCliArgs(['--port=1']), { cmd: 'error', message: 'unknown argument "--port=1"' })
     assert.deepEqual(parseCliArgs(['window', 'now']), { cmd: 'error', message: 'unexpected argument "now" after "window"' })
   })
+  test('telemetry on|off|status, status by default; anything else is an error', () => {
+    assert.deepEqual(parseCliArgs(['telemetry']), { cmd: 'telemetry', action: 'status' })
+    assert.deepEqual(parseCliArgs(['telemetry', 'on']), { cmd: 'telemetry', action: 'on' })
+    assert.deepEqual(parseCliArgs(['telemetry', 'off']), { cmd: 'telemetry', action: 'off' })
+    assert.deepEqual(parseCliArgs(['telemetry', 'status']), { cmd: 'telemetry', action: 'status' })
+    assert.deepEqual(parseCliArgs(['telemetry', 'maybe']), {
+      cmd: 'error',
+      message: 'unknown telemetry action "maybe"; expected on, off or status',
+    })
+    assert.deepEqual(parseCliArgs(['telemetry', 'off', 'now']), {
+      cmd: 'error',
+      message: 'unexpected argument "now" after "telemetry off"',
+    })
+  })
+  test('usage lists the telemetry command and its variables', () => {
+    assert.match(USAGE, /telemetry \[on\|off\|status\]/)
+    for (const v of ['LD_TELEMETRY=0', 'LD_TELEMETRY_DEBUG=1', 'DO_NOT_TRACK=1']) assert.ok(USAGE.includes(v), v)
+  })
   test('usage shows the MCP client config line', () => {
     assert.match(USAGE, /"command": "npx", "args": \["-y", "layout-debug-mcp"\]/)
   })

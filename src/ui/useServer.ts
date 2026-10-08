@@ -44,6 +44,8 @@ export interface ServerState {
    * `ready` seeds it and `agentStatus` follows every change.
    */
   listening: boolean
+  /** The server asks for its one-time telemetry notice (telemetry on, not dismissed yet). */
+  telemetryNotice: boolean
   projectDir: string | null
   targetUrl: string | null
   device: string | null
@@ -80,6 +82,7 @@ export function useServer(locale: Locale) {
     requestsSeed: 0,
     target: 'web',
     listening: false,
+    telemetryNotice: false,
     projectDir: null,
     targetUrl: null,
     device: null,
@@ -143,6 +146,8 @@ export function useServer(locale: Locale) {
                 ...s,
                 target: msg.target,
                 listening: msg.listening === true,
+                // `?.`: a server older than telemetry sends no such field.
+                telemetryNotice: msg.telemetry?.showNotice === true,
                 projectDir: msg.projectDir,
                 targetUrl: msg.targetUrl,
                 device: msg.device,

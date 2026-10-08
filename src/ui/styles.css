@@ -407,6 +407,41 @@ kbd {
   margin-top: 8px;
 }
 
+/* One-time telemetry notice: a quiet line in the column under the header, never over the frame. */
+.tnotice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 6px 12px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  min-width: 0;
+}
+.tnotice__text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg-2);
+}
+.tnotice__link {
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--fg-3);
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+.tnotice__link:hover {
+  text-decoration-color: var(--fg);
+}
+.tnotice__ok {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .tipwrap {
   position: relative;
   display: inline-flex;

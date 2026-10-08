@@ -312,6 +312,8 @@ export type UiToServer =
   | { t: 'overrides'; overrides: Override[] }
   | { t: 'submit'; comment: string }
   | { t: 'clearRequests' }
+  /** The user closed the one-time telemetry notice; the server remembers it in the telemetry state file. */
+  | { t: 'telemetryNoticeDismissed' }
   // --- android target: the device is reachable only through the server ---
   | { t: 'androidCapture' }
   | { t: 'androidOverride'; override: Override }
@@ -328,6 +330,11 @@ export type ServerToUi =
       deviceModel: string | null
       /** An agent is waiting for messages over MCP; later changes come as `agentStatus`. */
       listening: boolean
+      /**
+       * Anonymous usage telemetry of the server. `showNotice`: show the one-time notice
+       * (enabled and not dismissed yet); closing it sends `telemetryNoticeDismissed`.
+       */
+      telemetry: { enabled: boolean; showNotice: boolean }
     }
   /**
    * The "agent listening" state changed. Listening = a wait_for_message call is open, one

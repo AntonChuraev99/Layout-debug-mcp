@@ -23,10 +23,25 @@ import type {
   Snapshot,
   WaitResponse,
 } from '../shared/protocol.ts'
+import {
+  countBucket,
+  durationBucket,
+  formatClient,
+  initTelemetry,
+  installCrashHandlers,
+  OPEN_WINDOW_NOTE,
+  type TelemetryEvent,
+  type ToolName,
+  type ToolOutcome,
+} from '../shared/telemetry.ts'
 import { WAIT_MAX_SECONDS, WAIT_MIN_SECONDS } from '../shared/wait.ts'
 import { resolveServerBase, resolveWaitSeconds, unreachableMessage } from './connection.ts'
 import { compactTree, describeNode, describeRequest, WAIT_FOOTER, waitTimeoutText } from './format.ts'
 import { openWindow } from './launch.ts'
+
+// Anonymous usage telemetry (src/shared/telemetry.ts): stderr only, never blocks a tool call.
+const telemetry = initTelemetry({ process: 'mcp' })
+installCrashHandlers(telemetry)
 
 const BASE = resolveServerBase(process.env, SERVER_PORT)
 const EXTERNAL_SERVER = Boolean(process.env.LD_SERVER_URL?.trim())
@@ -80,9 +95,19 @@ function text(body: string) {
   return { content: [{ type: 'text' as const, text: body }] }
 }
 
-function fail(err: unknown) {
+/** A tool result plus how the call ended, for telemetry (never parsed back out of the text). */
+interface Reply {
+  result: ReturnType<typeof text>
+  outcome: ToolOutcome
+  /** Extra tool_called properties (reply_in_window). */
+  props?: Pick<Extract<TelemetryEvent, { type: 'tool_called' }>, 'status' | 'has_request_id'>
+}
+
+const reply = (body: string, outcome: ToolOutcome, props?: Reply['props']): Reply => ({ result: text(body), outcome, props })
+
+function fail(err: unknown): Reply {
   if (err instanceof ApiError) {
-    return text(
+    return reply(
       `The layout-debug server (${BASE}) refused the call: ${err.message}\n` +
         (err.status === 403
           ? 'The server only accepts local, non-browser calls; check LD_SERVER_URL points at it.'
@@ -90,17 +115,52 @@ function fail(err: unknown) {
             ? 'The server is older than this MCP server; call open_window, which replaces an older server ' +
               'when no window is connected to it.'
             : 'Fix the arguments and call the tool again.'),
+      err.status === 403 ? 'http_403' : err.status === 404 ? 'http_404' : 'http_error',
     )
   }
-  if (err instanceof UnreachableError) return text(unreachableMessage(BASE, err.message, process.env))
+  if (err instanceof UnreachableError) return reply(unreachableMessage(BASE, err.message, process.env), 'unreachable')
   // Anything else is a fault in this process (bad data, a bug), not a dead server: say what it was.
   const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
   console.error(`[layout-debug] MCP tool failed: ${err instanceof Error ? err.stack : message}`)
-  return text(
+  return reply(
     `The layout-debug MCP server failed while preparing the result: ${message}. ` +
       'The server itself answered; this is a bug in layout-debug-mcp. Try the call again; ' +
       'if it repeats, report it at https://github.com/AntonChuraev99/Layout-debug-mcp/issues.',
+    'internal_error',
   )
+}
+
+// --- telemetry --------------------------------------------------------------
+
+let startTracked = false
+/** `mcp_started`, once the client has said who it is (initialize), or at the first tool call. */
+function trackStart() {
+  if (startTracked) return
+  startTracked = true
+  const client = server.server.getClientVersion()
+  if (client) telemetry.setContext({ client_name: client.name, client_version: client.version })
+  telemetry.track({ type: 'mcp_started', external_server: EXTERNAL_SERVER })
+}
+
+/** wait_for_message timeouts are normal and frequent: counted here, sent with the next real result. */
+let waitTimeouts = 0
+
+/** Tracks one finished tool call and returns its result. */
+function done(tool: ToolName, startedAt: number, r: Reply) {
+  trackStart()
+  const event: TelemetryEvent = {
+    type: 'tool_called',
+    tool,
+    outcome: r.outcome,
+    duration: durationBucket(Date.now() - startedAt),
+    ...r.props,
+  }
+  if (tool === 'wait_for_message') {
+    event.wait_timeouts = countBucket(waitTimeouts)
+    waitTimeouts = 0
+  }
+  telemetry.track(event)
+  return r.result
 }
 
 const INSTRUCTIONS =
@@ -122,10 +182,22 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
+    const startedAt = Date.now()
+    trackStart()
     try {
-      return text(await openWindow({ base: BASE, port: SERVER_PORT, env: process.env, external: EXTERNAL_SERVER }))
+      const opened = await openWindow({
+        base: BASE,
+        port: SERVER_PORT,
+        env: process.env,
+        external: EXTERNAL_SERVER,
+        telemetryClient: formatClient(telemetry.clientContext),
+      })
+      telemetry.track({ type: 'window_open', server: opened.server, browser: opened.browser })
+      const usable = opened.browser !== 'skipped'
+      const body = usable && telemetry.windowNoticePending() ? `${opened.text}\n\n${OPEN_WINDOW_NOTE}` : opened.text
+      return done('open_window', startedAt, reply(body, usable ? 'ok' : 'unreachable'))
     } catch (err) {
-      return fail(err)
+      return done('open_window', startedAt, fail(err))
     }
   },
 )
@@ -150,27 +222,39 @@ server.registerTool(
   },
   async ({ timeoutSec }, extra) => {
     const seconds = timeoutSec ?? wait.seconds
+    const startedAt = Date.now()
+    const finish = (r: Reply) => done('wait_for_message', startedAt, r)
     try {
       // The server answers within `seconds`; the margin only covers a server that hangs.
       const signal = AbortSignal.any([extra.signal, AbortSignal.timeout((seconds + 15) * 1000)])
       const body = await api<WaitResponse>(`/api/requests/wait?timeout=${seconds}`, { method: 'POST', signal })
-      if ('timeout' in body) return text(waitTimeoutText(seconds))
-      return text(`${describeRequest(body.request)}\n\n${WAIT_FOOTER(body.request.id)}`)
+      if ('timeout' in body) {
+        trackStart()
+        waitTimeouts++
+        return text(waitTimeoutText(seconds))
+      }
+      return finish(reply(`${describeRequest(body.request)}\n\n${WAIT_FOOTER(body.request.id)}`, 'delivered'))
     } catch (err) {
       if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-        if (extra.signal.aborted) return text('Cancelled by the client; nothing was taken from the queue.')
-        return text(
-          `The layout-debug server at ${BASE} did not answer within ${seconds + 15} s. ` +
-            'Call open_window to check it, then wait_for_message again.',
+        if (extra.signal.aborted) return finish(reply('Cancelled by the client; nothing was taken from the queue.', 'cancelled'))
+        return finish(
+          reply(
+            `The layout-debug server at ${BASE} did not answer within ${seconds + 15} s. ` +
+              'Call open_window to check it, then wait_for_message again.',
+            'server_hung',
+          ),
         )
       }
       if (err instanceof UnreachableError) {
-        return text(
-          `${unreachableMessage(BASE, err.message, process.env)}\n` +
-            'Call open_window to start the server and open the window, then wait_for_message again.',
+        return finish(
+          reply(
+            `${unreachableMessage(BASE, err.message, process.env)}\n` +
+              'Call open_window to start the server and open the window, then wait_for_message again.',
+            'unreachable',
+          ),
         )
       }
-      return fail(err)
+      return finish(fail(err))
     }
   },
 )
@@ -184,12 +268,15 @@ server.registerTool(
     inputSchema: { maxDepth: z.number().int().min(1).max(30).default(8).describe('Tree depth') },
   },
   async ({ maxDepth }) => {
+    const startedAt = Date.now()
     try {
       const { snapshot } = await api<{ snapshot: Snapshot | null }>('/api/snapshot')
-      if (!snapshot) return text('No snapshot yet: open the page in the layout-debug window (open_window).')
-      return text(compactTree(snapshot, maxDepth))
+      if (!snapshot) {
+        return done('layout_snapshot', startedAt, reply('No snapshot yet: open the page in the layout-debug window (open_window).', 'empty'))
+      }
+      return done('layout_snapshot', startedAt, reply(compactTree(snapshot, maxDepth), 'ok'))
     } catch (err) {
-      return fail(err)
+      return done('layout_snapshot', startedAt, fail(err))
     }
   },
 )
@@ -203,6 +290,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
+    const startedAt = Date.now()
     try {
       const data = await api<{
         node: LayoutNode | null
@@ -211,10 +299,17 @@ server.registerTool(
         unit: string | null
         pxPerUnit: number | null
       }>('/api/selected')
-      if (!data.node) return text('Nothing is selected. Ask the user to select an element in the layout-debug window.')
-      return text(describeNode(data.node, data.ancestors ?? [], data.unit ?? 'css-px', data.pxPerUnit ?? 1, data.overrides ?? []))
+      if (!data.node) {
+        return done(
+          'selected_element',
+          startedAt,
+          reply('Nothing is selected. Ask the user to select an element in the layout-debug window.', 'empty'),
+        )
+      }
+      const body = describeNode(data.node, data.ancestors ?? [], data.unit ?? 'css-px', data.pxPerUnit ?? 1, data.overrides ?? [])
+      return done('selected_element', startedAt, reply(body, 'ok'))
     } catch (err) {
-      return fail(err)
+      return done('selected_element', startedAt, fail(err))
     }
   },
 )
@@ -234,10 +329,11 @@ server.registerTool(
     },
   },
   async ({ includeConsumed, markConsumed }) => {
+    const startedAt = Date.now()
     try {
       const { requests } = await api<{ requests: EditRequest[] }>('/api/requests')
       const list = includeConsumed ? requests : requests.filter((r) => !r.consumed)
-      if (!list.length) return text('The queue is empty.')
+      if (!list.length) return done('pending_requests', startedAt, reply('The queue is empty.', 'empty'))
       const body = list.map(describeRequest).join('\n\n---\n\n')
       const footer =
         `\n\n---\n\n${list.length} edit(s). After handling one, call reply_in_window with its requestId ` +
@@ -251,9 +347,9 @@ server.registerTool(
           body: JSON.stringify(consumeBody),
         })
       }
-      return text(body + footer)
+      return done('pending_requests', startedAt, reply(body + footer, 'ok'))
     } catch (err) {
-      return fail(err)
+      return done('pending_requests', startedAt, fail(err))
     }
   },
 )
@@ -289,6 +385,8 @@ server.registerTool(
   },
   // `text` is also the name of the response helper, so the argument is renamed.
   async ({ text: content, requestId, status, role }) => {
+    const startedAt = Date.now()
+    const props = { status, has_request_id: Boolean(requestId) }
     try {
       const payload: PostChatBody = { text: content, role }
       if (requestId) {
@@ -308,19 +406,36 @@ server.registerTool(
             'posted as a general reply and no edit changed status. Check the id with pending_requests ' +
             '(includeConsumed: true).'
       const next = ' Now call wait_for_message again.'
+      const unmatched = Boolean(requestId) && body.requestId !== requestId
       if (!body.delivered) {
-        return text(
-          'Sent, but the layout-debug window is closed right now; the message will appear when it is opened.' +
-            tie +
-            next,
+        return done(
+          'reply_in_window',
+          startedAt,
+          reply(
+            'Sent, but the layout-debug window is closed right now; the message will appear when it is opened.' +
+              tie +
+              next,
+            unmatched ? 'id_unmatched' : 'window_closed',
+            props,
+          ),
         )
       }
-      return text(`Sent to the window (${body.delivered}).${tie}${next}`)
+      return done(
+        'reply_in_window',
+        startedAt,
+        reply(`Sent to the window (${body.delivered}).${tie}${next}`, unmatched ? 'id_unmatched' : 'ok', props),
+      )
     } catch (err) {
-      return fail(err)
+      return done('reply_in_window', startedAt, { ...fail(err), props })
     }
   },
 )
+
+server.server.oninitialized = trackStart
+
+// The client closed our stdin: the session is over, send what is queued (bounded by the flush deadline).
+process.stdin.once('end', () => void telemetry.flush())
+process.stdin.once('close', () => void telemetry.flush())
 
 const transport = new StdioServerTransport()
 await server.connect(transport)

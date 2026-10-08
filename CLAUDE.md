@@ -66,7 +66,7 @@ Why it is built this way:
 - adb is called directly via `child_process`, not through a wrapper like adbkit, so adb errors reach the user as they are.
 - On "apply", the window sends raw facts (delta in dp, boxes before and after, parent and siblings, the node's overrides); whether a move becomes padding, offset or a spacer is the agent's call.
 
-Key decisions: [server trust boundary](docs/decisions/local-server-hardening-2026-09-21.md), [Android tree and live overrides](docs/decisions/android-compose-tree-and-live-overrides-2026-07-26.md).
+Key decisions: [server trust boundary](docs/decisions/local-server-hardening-2026-09-21.md), [Android tree and live overrides](docs/decisions/android-compose-tree-and-live-overrides-2026-07-26.md), [anonymous telemetry](docs/decisions/anonymous-telemetry-2026-10-08.md).
 
 ## Commands
 
@@ -86,3 +86,4 @@ npm run build
 - Device, ports and project paths are configuration (`layout-debug.config.json`, `LD_*` env), not hard-coded.
 - Every new endpoint or MCP tool goes through `src/server/security.ts`.
 - Page data (class names, text, anchors, user comments) reaches the agent as marked, length-capped data, never as instructions.
+- Telemetry carries no content: a new event or property goes through the allow-list in `src/shared/telemetry.ts` and the README "Telemetry" list.

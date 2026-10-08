@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 
+### Added
+
+- Anonymous usage telemetry (tool outcomes, error codes, funnel steps, OS and MCP client name; never content, paths or messages). On by default, off in CI. Turn it off with `LD_TELEMETRY=0`, `DO_NOT_TRACK=1` or `npx layout-debug-mcp telemetry off`; `LD_TELEMETRY_DEBUG=1` prints events instead of sending. The first run says so in the log and in the window. See [Telemetry](./README.md#telemetry).
+
 ## [0.2.0] - 2026-10-08
 
 One-command install and one agent entry: whatever agent you connect over MCP answers in the window's chat.

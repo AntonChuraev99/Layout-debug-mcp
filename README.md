@@ -56,7 +56,7 @@ Web has precedents (Onlook, LocatorJS, code-inspector). Selecting any Compose la
 - **Inbox.** Every request with its status (Queued, Agent editing, Done, Error) and time, plus replies that aren't tied to an element.
 - **Light install.** `npx -y layout-debug-mcp` downloads only this package: no agent runtime, no model SDK.
 - **English and Russian UI**, switchable in the header.
-- **Local only.** Window, server and MCP process run on your machine. No cloud, no telemetry.
+- **Local only.** Window, server and MCP process run on your machine. No cloud; only anonymous usage counts leave it, and one variable turns them off ([Telemetry](#telemetry)).
 
 ## What your agent receives
 
@@ -349,6 +349,8 @@ Environment variables (set them in the MCP client's `env`) override `layout-debu
 | `LD_WAIT_SECONDS` | none | `40` | How long `wait_for_message` waits before "no message yet" (5–50) |
 | `LD_NO_BROWSER` | none | unset | `1` = don't open the browser, only print the window URL |
 | `LD_IDLE_EXIT_MINUTES` | none | `30` from `open_window`, off otherwise | Stop the server after this many minutes with no window and no agent; `0` = never |
+| `LD_TELEMETRY` | none | on | `0` = send no usage data (see [Telemetry](#telemetry)) |
+| `LD_TELEMETRY_DEBUG` | none | unset | `1` = print each usage event to stderr instead of sending it |
 
 An invalid server setting or a broken config file stops the server at start with a message instead of falling back to the default. An invalid `LD_WAIT_SECONDS` keeps the default and writes a warning to the MCP log.
 
@@ -389,10 +391,28 @@ Good tools sit nearby; here is where this one differs.
 - The server listens on `127.0.0.1` only and checks `Origin` and `Host` on HTTP and WebSocket requests, so a web page open in your browser can't drive it (including via DNS rebinding).
 - The tool has no agent of its own and never edits your code. Your agent does, with the permissions your MCP client gives it.
 - Page text (class names, text, anchors) reaches the agent marked as untrusted page data and length-capped.
-- Nothing leaves your machine except what goes to the agent you connect.
+- Nothing leaves your machine except what goes to the agent you connect, and anonymous usage counts ([Telemetry](#telemetry)) unless you turn them off.
 - The web inspector is added only in dev. The Android agent lives in the debug source set; the spike app still keeps a small inert bridge in the main source set, which the library will split into `-agent` / `-noop` artifacts.
 
 Found a vulnerability? See [SECURITY.md](./SECURITY.md).
+
+## Telemetry
+
+layout-debug-mcp sends anonymous usage data so we can see which clients and targets people use and where the tool fails. It is on by default and off in CI.
+
+**Turn it off** with any of:
+
+- `LD_TELEMETRY=0` in the MCP client's `env`
+- `DO_NOT_TRACK=1`
+- `npx layout-debug-mcp telemetry off` (saved for every later run; `telemetry status` shows the state and why, `telemetry on` undoes it)
+
+**What is sent:** tool names and their outcome (`ok`, `unreachable`, `empty`…), how long a call took (bucketed), the window's error codes (`device_no_adb`, `device_not_found`…), funnel steps (window opened, element tree received, edit sent, agent replied done or error), session counts in buckets, the error class name and system code (`ECONNRESET`…) of a crash, and the package version, OS, CPU architecture, Node major version and the MCP client's name and version (`claude-code`, `cursor`…).
+
+**What is never sent:** page or app content, URLs, file paths, class names, element text, your comments, the agent's replies, error messages, stack traces, host or user names. The code allows only fixed property names per event: [`src/shared/telemetry.ts`](./src/shared/telemetry.ts).
+
+**Identity:** a random id stored in `telemetry.json` in `%APPDATA%\layout-debug-mcp` (Windows) or `~/.config/layout-debug-mcp`; not linked to you or your machine. The IP address is not stored or used for location. Events go to [Amplitude](https://amplitude.com) (US).
+
+**See what is sent:** `LD_TELEMETRY_DEBUG=1` prints every event to stderr and sends nothing. To delete your data, open an issue with the id from `telemetry status`.
 
 ## Limitations
 

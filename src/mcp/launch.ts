@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url'
 import { openBrowser } from '../shared/browser.ts'
 import { PACKAGE_NAME, PACKAGE_ROOT, PACKAGE_VERSION, RUNNING_FROM_SOURCE } from '../shared/paths.ts'
 import type { HealthResponse } from '../shared/protocol.ts'
+import type { BrowserOutcome, ServerOutcome } from '../shared/telemetry.ts'
 
 const START_TIMEOUT_MS = 5_000
 const STOP_TIMEOUT_MS = 3_000
@@ -71,10 +72,17 @@ export function serverCommand(): { args: string[]; missing?: string } {
   return { args: [entry] }
 }
 
-/** Starts the server detached and waits until it answers. Returns its health or the reason it did not start. */
-async function startServer(base: string, port: number, env: Env): Promise<HealthResponse | string> {
+type StartFailure = { outcome: 'spawn_failed' | 'exited_at_start' | 'start_timeout'; text: string }
+
+/** Starts the server detached and waits until it answers. Returns its health or why it did not start. */
+async function startServer(
+  base: string,
+  port: number,
+  env: Env,
+  telemetryClient: string | null,
+): Promise<HealthResponse | StartFailure> {
   const command = serverCommand()
-  if (command.missing) return `The server entry is missing: ${command.missing}`
+  if (command.missing) return { outcome: 'spawn_failed', text: `The server entry is missing: ${command.missing}` }
   const logPath = serverLogPath(port)
   let logFd: number | null = null
   try {
@@ -94,6 +102,9 @@ async function startServer(base: string, port: number, env: Env): Promise<Health
         LD_IDLE_EXIT_MINUTES: env.LD_IDLE_EXIT_MINUTES?.trim() || IDLE_EXIT_MINUTES,
         // The spawned server always serves the window itself.
         LD_DEV: '',
+        // Telemetry of the server names the MCP client that started it (name@version, capped).
+        LD_LAUNCHED_BY: 'mcp',
+        LD_TELEMETRY_CLIENT: telemetryClient ?? '',
       },
       detached: true,
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
@@ -116,22 +127,25 @@ async function startServer(base: string, port: number, env: Env): Promise<Health
   while (Date.now() < deadline) {
     const p = await probe(base, 500)
     if (p.kind === 'ours') return p.health
-    if (spawnError) return `Could not start the server process: ${spawnError}`
+    if (spawnError) return { outcome: 'spawn_failed', text: `Could not start the server process: ${spawnError}` }
     if (exited) {
       // Exit 0 can mean another copy won the race for the port; it answers then.
       const again = await probe(base, 500)
       if (again.kind === 'ours') return again.health
       const { code, signal } = exited as { code: number | null; signal: string | null }
-      return (
-        `The server exited at start (${signal ?? `code ${code}`}). Log ${logPath}:\n` + logTail(logPath)
-      )
+      return {
+        outcome: 'exited_at_start',
+        text: `The server exited at start (${signal ?? `code ${code}`}). Log ${logPath}:\n` + logTail(logPath),
+      }
     }
     await sleep(POLL_MS)
   }
-  return (
-    `The server did not answer at ${base} within ${START_TIMEOUT_MS / 1000} s. ` +
-    (logFd !== null ? `Log ${logPath}:\n${logTail(logPath)}` : 'Its log could not be written.')
-  )
+  return {
+    outcome: 'start_timeout',
+    text:
+      `The server did not answer at ${base} within ${START_TIMEOUT_MS / 1000} s. ` +
+      (logFd !== null ? `Log ${logPath}:\n${logTail(logPath)}` : 'Its log could not be written.'),
+  }
 }
 
 async function stopServer(base: string): Promise<boolean> {
@@ -173,33 +187,51 @@ export interface OpenWindowOptions {
   env: Env
   /** LD_SERVER_URL is set: the server lives elsewhere, this process must not start one. */
   external: boolean
+  /** `name@version` of the MCP client, handed to a server this call starts (its telemetry). */
+  telemetryClient?: string | null
 }
 
-/** The text open_window returns, success or not. */
-export async function openWindow({ base, port, env, external }: OpenWindowOptions): Promise<string> {
+/** The text open_window returns, plus what happened, as enums for telemetry. */
+export interface OpenWindowResult {
+  text: string
+  server: ServerOutcome
+  browser: BrowserOutcome
+}
+
+/** open_window, success or not. */
+export async function openWindow({ base, port, env, external, telemetryClient = null }: OpenWindowOptions): Promise<OpenWindowResult> {
   const notes: string[] = []
   let state = await probe(base)
+  let server: ServerOutcome = 'reused'
 
   if (state.kind === 'foreign') {
-    return (
-      `Port ${port} is taken by another program (it answered HTTP ${state.status} on /api/health, ` +
-      `not as ${PACKAGE_NAME}). Set LD_SERVER_PORT to a free port in the env of this MCP server ` +
-      'in the client config, restart the client session, and call open_window again.'
-    )
+    return {
+      text:
+        `Port ${port} is taken by another program (it answered HTTP ${state.status} on /api/health, ` +
+        `not as ${PACKAGE_NAME}). Set LD_SERVER_PORT to a free port in the env of this MCP server ` +
+        'in the client config, restart the client session, and call open_window again.',
+      server: 'port_busy',
+      browser: 'skipped',
+    }
   }
 
   const action = state.kind === 'ours' ? staleServerAction(state.health, PACKAGE_VERSION, external) : 'use'
   if (state.kind === 'ours' && action !== 'use') {
     if (action === 'replace') {
       if (!(await stopServer(base))) {
-        return (
-          `A ${PACKAGE_NAME} ${state.health.version} server (pid ${state.health.pid}) runs at ${base} and did not ` +
-          `stop when asked. Stop that process, then call open_window again.`
-        )
+        return {
+          text:
+            `A ${PACKAGE_NAME} ${state.health.version} server (pid ${state.health.pid}) runs at ${base} and did not ` +
+            `stop when asked. Stop that process, then call open_window again.`,
+          server: 'stop_failed',
+          browser: 'skipped',
+        }
       }
       notes.push(`Replaced an older ${PACKAGE_NAME} ${state.health.version} server.`)
       state = { kind: 'down', reason: 'stopped' }
+      server = 'replaced_stale'
     } else {
+      server = 'kept_stale'
       notes.push(
         `Note: the running server is ${PACKAGE_NAME} ${state.health.version}, this MCP server is ${PACKAGE_VERSION}; ` +
           `it is kept because ${
@@ -218,29 +250,38 @@ export async function openWindow({ base, port, env, external }: OpenWindowOption
     health = state.health
   } else {
     if (external) {
-      return (
-        `The layout-debug server at ${base} (LD_SERVER_URL) does not answer: ${state.reason}. ` +
-        'Start it there, or remove LD_SERVER_URL so open_window can start one itself.'
-      )
+      return {
+        text:
+          `The layout-debug server at ${base} (LD_SERVER_URL) does not answer: ${state.reason}. ` +
+          'Start it there, or remove LD_SERVER_URL so open_window can start one itself.',
+        server: 'external_down',
+        browser: 'skipped',
+      }
     }
-    const started = await startServer(base, port, env)
-    if (typeof started === 'string') return `Could not open the layout-debug window. ${started}`
+    const started = await startServer(base, port, env, telemetryClient)
+    if (!('ok' in started)) {
+      return { text: `Could not open the layout-debug window. ${started.text}`, server: started.outcome, browser: 'skipped' }
+    }
     health = started
+    if (server === 'reused') server = 'started'
     notes.push(`Started the layout-debug server (pid ${health.pid}); its log: ${serverLogPath(port)}.`)
   }
 
   const url = health.windowUrl
   let opened: string
+  let browser: BrowserOutcome
   if (health.windows > 0) {
     opened = `A layout-debug window is already open (${url}); the user works there.`
+    browser = 'already_open'
   } else {
     const failure = await openBrowser(url)
     opened = failure
       ? `Could not open a browser (${failure}). Ask the user to open ${url}`
       : `Opened the layout-debug window in the browser: ${url}`
+    browser = !failure ? 'opened' : env.LD_NO_BROWSER?.trim() === '1' ? 'disabled' : 'failed'
   }
 
-  return [
+  const text = [
     opened,
     `Server: ${PACKAGE_NAME} ${health.version}, target: ${health.target} ${health.target === 'web' ? health.targetUrl : ''}`.trimEnd() +
       `, project: ${health.projectDir}.`,
@@ -248,4 +289,5 @@ export async function openWindow({ base, port, env, external }: OpenWindowOption
     '',
     LISTEN_INSTRUCTIONS,
   ].join('\n')
+  return { text, server, browser }
 }

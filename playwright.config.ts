@@ -24,6 +24,14 @@ const SERVER_PORT = Number(process.env.LD_E2E_SERVER_PORT || 5285)
  * The server already binds 127.0.0.1 and accepts both origins (WINDOW_ORIGINS).
  */
 const UI_URL = `http://127.0.0.1:${UI_PORT}`
+
+/**
+ * The suite never sends telemetry. Set on this process too, so the workers (forked from
+ * it) and everything they spawn — the MCP server in helpers.ts, the servers in
+ * offline.spec.ts — inherit it, not only the webServer below.
+ */
+process.env.LD_TELEMETRY = '0'
+process.env.LD_TELEMETRY_DEBUG = ''
 const IPV4_FIRST = [process.env.NODE_OPTIONS, '--dns-result-order=ipv4first'].filter(Boolean).join(' ')
 
 export default defineConfig({
@@ -56,6 +64,8 @@ export default defineConfig({
       LD_TARGET: '',
       LD_TARGET_URL: '',
       NODE_OPTIONS: IPV4_FIRST,
+      LD_TELEMETRY: '0',
+      LD_TELEMETRY_DEBUG: '',
     },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
