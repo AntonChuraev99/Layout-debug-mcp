@@ -5,6 +5,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-08
+
 One-command install and one agent entry: whatever agent you connect over MCP answers in the window's chat.
 
 ### Added
@@ -98,5 +100,6 @@ First public release. Install is clone-based (`npm install` + `npm run dev`); on
 - Inspector accepts messages only from its parent window, whose origins now follow the configured UI port.
 - Lockfile refreshed with `npm audit fix` (patch / minor bumps of transitive dependencies: fast-uri, hono, ip-address, nanoid, proxy-addr, qs, source-map-js); `npm audit` reports 0 vulnerabilities.
 
-[Unreleased]: https://github.com/AntonChuraev99/Layout-debug-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/AntonChuraev99/Layout-debug-mcp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/AntonChuraev99/Layout-debug-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/AntonChuraev99/Layout-debug-mcp/releases/tag/v0.1.0
