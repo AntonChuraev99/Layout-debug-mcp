@@ -197,8 +197,12 @@ describe('sending never throws', () => {
     const hang = (() => new Promise(() => {})) as unknown as typeof fetch
     const { t } = make({ fetchImpl: hang })
     track(t)
+    // flush's deadline timer is unref'd so it never holds an exit; a hung fake fetch holds nothing,
+    // so keep the loop alive here, as the open socket of a real hung fetch would.
+    const keepAlive = setInterval(() => {}, 1_000)
     const started = Date.now()
     await t.flush(200)
+    clearInterval(keepAlive)
     assert.ok(Date.now() - started < 1_000)
     t.close()
   })
