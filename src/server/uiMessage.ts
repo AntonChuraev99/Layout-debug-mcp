@@ -122,6 +122,7 @@ export function parseUiMessage(raw: string): ParsedUiMessage {
       return p ? bad(p) : { ok: true, msg: data as UiToServer }
     }
     case 'clearRequests':
+    case 'telemetryNoticeDismissed':
     case 'androidCapture':
     case 'androidClearOverrides':
       return { ok: true, msg: data as UiToServer }

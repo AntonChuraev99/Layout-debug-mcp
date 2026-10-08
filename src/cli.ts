@@ -1,7 +1,8 @@
 /**
  * The `layout-debug-mcp` bin. No arguments: the stdio MCP server (what an MCP
  * client starts). `window`: the layout-debug server in the foreground, plus the
- * window in the browser. The entries load lazily, after the arguments are checked,
+ * window in the browser. `telemetry on|off|status`: the telemetry switch (sends
+ * nothing). The entries load lazily, after the arguments are checked,
  * so `--version` and `--help` work even with a broken environment (a bad LD_* port).
  *
  * The entries are separate bundles in dist (dist/mcp/index.js, dist/server/index.js)
@@ -29,6 +30,14 @@ switch (command.cmd) {
     console.error(`layout-debug-mcp: ${command.message}\n\n${USAGE}`)
     process.exitCode = 1
     break
+  case 'telemetry': {
+    const { telemetryCommand } = await import('./shared/telemetry.ts')
+    const result = telemetryCommand(command.action, process.env)
+    if (result.code) console.error(`layout-debug-mcp: ${result.text}`)
+    else console.log(result.text)
+    process.exitCode = result.code
+    break
+  }
   case 'mcp':
     // stdout belongs to MCP frames from here on.
     await loadEntry('mcp')

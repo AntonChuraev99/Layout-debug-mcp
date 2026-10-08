@@ -8,6 +8,7 @@ export type CliCommand =
   | { cmd: 'window' }
   | { cmd: 'version' }
   | { cmd: 'help' }
+  | { cmd: 'telemetry'; action: 'on' | 'off' | 'status' }
   | { cmd: 'error'; message: string }
 
 export const USAGE = `Usage: layout-debug-mcp [command]
@@ -16,13 +17,20 @@ Commands:
   (none)       Run the MCP server over stdio. This is what an MCP client starts:
                {"command": "npx", "args": ["-y", "layout-debug-mcp"]}
   window       Run the layout-debug server in the foreground and open the window.
+  telemetry [on|off|status]
+               Turn anonymous usage telemetry on or off, or show whether it is on
+               and why (default: status).
 
 Options:
   -v, --version  Print the version and exit.
   -h, --help     Print this help and exit.
 
 Environment: LD_SERVER_PORT, LD_TARGET, LD_TARGET_URL, LD_PROJECT_DIR, LD_CONFIG,
-LD_ANDROID_PORT, LD_DEVICE, LD_NO_BROWSER=1, LD_WAIT_SECONDS.`
+LD_ANDROID_PORT, LD_DEVICE, LD_NO_BROWSER=1, LD_WAIT_SECONDS,
+LD_TELEMETRY=0 (telemetry off), LD_TELEMETRY_DEBUG=1 (print events, send nothing),
+DO_NOT_TRACK=1 (telemetry off).`
+
+const TELEMETRY_ACTIONS = ['on', 'off', 'status'] as const
 
 /**
  * `window` found a layout-debug server answering on its port: the line to print when
@@ -44,6 +52,14 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   if (args.includes('-v') || args.includes('--version')) return { cmd: 'version' }
   if (args.length === 0) return { cmd: 'mcp' }
   if (args.length === 1 && args[0] === 'window') return { cmd: 'window' }
+  if (args[0] === 'telemetry') {
+    const action = args[1] ?? 'status'
+    if (!(TELEMETRY_ACTIONS as readonly string[]).includes(action)) {
+      return { cmd: 'error', message: `unknown telemetry action "${action}"; expected on, off or status` }
+    }
+    if (args.length > 2) return { cmd: 'error', message: `unexpected argument "${args[2]}" after "telemetry ${action}"` }
+    return { cmd: 'telemetry', action: action as (typeof TELEMETRY_ACTIONS)[number] }
+  }
   if (args[0] !== 'window') return { cmd: 'error', message: `unknown argument "${args[0]}"` }
   return { cmd: 'error', message: `unexpected argument "${args[1]}" after "window"` }
 }

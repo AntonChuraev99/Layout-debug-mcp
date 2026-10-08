@@ -31,6 +31,8 @@ if (!files.length) {
 const r = spawnSync(process.execPath, ['--import', 'tsx', '--test', ...process.argv.slice(2), ...files], {
   cwd: ROOT,
   stdio: 'inherit',
+  // Tests never send telemetry; the servers and bins they spawn inherit this.
+  env: { ...process.env, LD_TELEMETRY: '0', LD_TELEMETRY_DEBUG: '' },
 })
 if (r.error) {
   console.error(`[test] could not start node --test: ${r.error.message}`)

@@ -41,6 +41,7 @@ import {
   unownedMessages,
   type RequestStatus,
 } from './thread.ts'
+import { TelemetryNotice } from './TelemetryNotice.tsx'
 import { useAndroidAutoRefresh } from './useAndroidAutoRefresh.ts'
 import { useDeviceFrame } from './useDeviceFrame.ts'
 import { RECONNECT_MS, useServer } from './useServer.ts'
@@ -807,6 +808,14 @@ export function App() {
   }, [nudge, isAndroid, web.setNudge, web.connected])
 
   const coachOpen = !isAndroid && web.connected && !coachSeen
+  // Closed here at once; the server remembers it. With the socket down only this session
+  // forgets it, and the next `ready` asks again.
+  const [telemetryNoticeClosed, setTelemetryNoticeClosed] = useState(false)
+  const closeTelemetryNotice = useCallback(() => {
+    setTelemetryNoticeClosed(true)
+    send({ t: 'telemetryNoticeDismissed' })
+  }, [send])
+
   const closeCoach = useCallback(() => {
     setCoachSeen(true)
     writeStorage(COACH_SEEN_KEY, '1')
@@ -1353,6 +1362,8 @@ export function App() {
         meta={meta}
         loading={loading}
       />
+
+      {state.telemetryNotice && !telemetryNoticeClosed && <TelemetryNotice onDismiss={closeTelemetryNotice} />}
 
       <main
         ref={canvasRef}

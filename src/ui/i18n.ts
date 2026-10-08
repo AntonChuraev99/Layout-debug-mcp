@@ -30,6 +30,10 @@ const en = {
   'inbox.newReplies': 'new replies',
   'lang.label': 'Language',
   'meta.layers': { one: '{count} layer', other: '{count} layers' },
+  'telemetry.label': 'Usage data',
+  'telemetry.text': 'layout-debug-mcp sends anonymous usage data: tool calls, error codes, OS and client name. Never page content or paths.',
+  'telemetry.howOff': 'How to turn off',
+  'telemetry.ok': 'Got it',
 
   // --- agent indicator and its popover ---
   'agent.listening': 'Agent listening',
@@ -253,6 +257,11 @@ const ru: Shape<typeof en> = {
   'inbox.newReplies': 'есть новые ответы',
   'lang.label': 'Язык',
   'meta.layers': { one: '{count} слой', few: '{count} слоя', many: '{count} слоёв', other: '{count} слоя' },
+  'telemetry.label': 'Данные об использовании',
+  'telemetry.text':
+    'layout-debug-mcp отправляет анонимные данные об использовании: вызовы инструментов, коды ошибок, ОС и имя клиента. Никогда не содержимое страниц и не пути.',
+  'telemetry.howOff': 'Как отключить',
+  'telemetry.ok': 'Понятно',
 
   'agent.listening': 'Агент слушает',
   'agent.none': 'Агент не слушает',
