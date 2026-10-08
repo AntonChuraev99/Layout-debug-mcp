@@ -103,6 +103,8 @@ interface Props {
   /** The "Talk cursor" bubble: its text, and the folded "•••" once the user has learned picking. */
   cursorLabel: string
   cursorCompact: boolean
+  /** An agent is listening: a queued mark reads "Queued", otherwise "Waiting for agent". */
+  agentListening?: boolean
   apiRef?: Ref<OverlayApi>
 }
 
@@ -143,6 +145,7 @@ export function Overlay({
   onForwardWheel,
   cursorLabel,
   cursorCompact,
+  agentListening = true,
   apiRef,
 }: Props) {
   const { t } = useT()
@@ -532,7 +535,7 @@ export function Overlay({
             {m.kind === 'queued' && !isSelected && (
               <Label canvasBox={toCanvas(r)} canvasWidth={canvasWidth} className="chip chip--queued">
                 <IconInbox size={12} />
-                {t('tag.queued')}
+                {t(agentListening ? 'tag.queued' : 'tag.waiting')}
               </Label>
             )}
           </div>

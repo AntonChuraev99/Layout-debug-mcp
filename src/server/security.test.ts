@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { after, before, describe, test } from 'node:test'
+import { spawnSync } from 'node:child_process'
+import { join, resolve } from 'node:path'
+import { describe, test } from 'node:test'
 import { SERVER_PORT, UI_PORT } from '../shared/ports.ts'
-import { checkApiRequest, checkStaticRequest, checkWritePath, checkWsUpgrade, type Verdict } from './security.ts'
+import {
+  checkApiRequest,
+  checkShutdownRequest,
+  checkStaticRequest,
+  checkWsUpgrade,
+  resolveStaticPath,
+  type Verdict,
+} from './security.ts'
 
 const ok = (v: Verdict) => assert.deepEqual(v, { ok: true })
 const denied = (v: Verdict, pattern?: RegExp) => {
@@ -75,91 +81,101 @@ describe('статика (inspector.js, demo)', () => {
   })
 })
 
-describe('запись агента', () => {
-  let base: string
-  let project: string
-  let outside: string
+describe('packaged mode: the window is served by the server from its own port', () => {
+  const ownOrigin = `http://127.0.0.1:${SERVER_PORT}`
+  test('WebSocket and API from the server origin pass', () => {
+    ok(checkWsUpgrade({ host: serverHost, origin: ownOrigin }))
+    ok(checkWsUpgrade({ host: `localhost:${SERVER_PORT}`, origin: `http://localhost:${SERVER_PORT}` }))
+    ok(checkApiRequest({ host: serverHost, origin: ownOrigin, 'sec-fetch-site': 'same-origin' }))
+  })
+  test('a POST from the window without Origin header but same-origin passes (shutdown, chat)', () => {
+    ok(checkApiRequest({ host: serverHost, 'sec-fetch-site': 'same-origin' }))
+  })
+  test('foreign and other-port origins are still refused', () => {
+    denied(checkWsUpgrade({ host: serverHost, origin: 'https://evil.example' }), /Origin/)
+    denied(checkApiRequest({ host: serverHost, origin: 'http://127.0.0.1:3000' }), /Origin/)
+    denied(checkApiRequest({ host: serverHost, origin: `https://127.0.0.1:${SERVER_PORT}` }), /Origin/)
+  })
+  test('DNS rebinding with the server origin is refused by Host', () => {
+    denied(checkApiRequest({ host: `attacker.example:${SERVER_PORT}`, origin: ownOrigin }), /Host/)
+  })
 
-  before(() => {
-    base = realpathSync.native(mkdtempSync(join(tmpdir(), 'ld-sec-')))
-    project = join(base, 'project')
-    outside = join(base, 'outside')
-    mkdirSync(join(project, 'src'), { recursive: true })
-    mkdirSync(join(project, '.git'), { recursive: true })
-    mkdirSync(outside, { recursive: true })
-    writeFileSync(join(project, 'src', 'App.tsx'), '')
-    writeFileSync(join(project, '.git', 'config'), '')
-    writeFileSync(join(outside, 'secret.txt'), '')
-  })
-  after(() => rmSync(base, { recursive: true, force: true }))
-
-  test('существующий файл внутри проекта — можно', () => {
-    ok(checkWritePath(project, join(project, 'src', 'App.tsx')))
-    ok(checkWritePath(project, 'src/App.tsx'))
-  })
-  test('новый файл в новом каталоге внутри проекта — можно', () => {
-    ok(checkWritePath(project, join(project, 'src', 'new', 'Card.tsx')))
-  })
-  test('имя, начинающееся с "..", но внутри проекта — можно', () => {
-    ok(checkWritePath(project, join(project, 'src', '..notes.md')))
-  })
-  test('путь в другом регистре на Windows — можно', { skip: process.platform !== 'win32' }, () => {
-    ok(checkWritePath(project, join(project.toUpperCase(), 'src', 'App.tsx')))
-  })
-  test('../ наружу — нельзя', () => {
-    denied(checkWritePath(project, '../outside/secret.txt'), /\.\./)
-    denied(checkWritePath(project, `${project}/../outside/secret.txt`), /\.\./)
-  })
-  test('абсолютный путь вне проекта — нельзя', () => {
-    denied(checkWritePath(project, join(outside, 'secret.txt')), /outside the project/)
-  })
-  test('каталог-ссылка (junction) наружу — нельзя', () => {
-    symlinkSync(outside, join(project, 'linkdir'), 'junction')
-    denied(checkWritePath(project, join(project, 'linkdir', 'secret.txt')), /outside the project/)
-    denied(checkWritePath(project, join(project, 'linkdir', 'new.txt')), /outside the project/)
-  })
-  test('висячая ссылка наружу — нельзя', () => {
-    symlinkSync(join(outside, 'not-yet'), join(project, 'dangling'), 'junction')
-    denied(checkWritePath(project, join(project, 'dangling', 'new.txt')), /outside the project/)
-  })
-  test('файловый симлинк наружу — нельзя', (t) => {
-    try {
-      symlinkSync(join(outside, 'secret.txt'), join(project, 'src', 'link.txt'), 'file')
-    } catch (err) {
-      // Windows without Developer Mode / admin cannot create file symlinks.
-      t.skip(`симлинк не создать: ${(err as NodeJS.ErrnoException).code}`)
-      return
-    }
-    denied(checkWritePath(project, join(project, 'src', 'link.txt')), /outside the project/)
-  })
-  test('.git/ — нельзя, в том числе обходными написаниями', () => {
-    denied(checkWritePath(project, join(project, '.git', 'config')), /\.git/)
-    denied(checkWritePath(project, '.git/hooks/pre-commit'), /\.git/)
-    denied(checkWritePath(project, '.GIT/config'), /\.git/)
-    denied(checkWritePath(project, '.git./config'), /\.git/)
-  })
-  test('.claude/ — нельзя, в любом месте и в любом написании', () => {
-    denied(checkWritePath(project, '.claude/settings.json'), /\.claude/)
-    denied(checkWritePath(project, '.claude/settings.local.json'), /\.claude/)
-    denied(checkWritePath(project, 'sub/.claude/x'), /\.claude/)
-    denied(checkWritePath(project, '.CLAUDE./settings.json'), /\.claude/)
-  })
-  test('.mcp.json — нельзя, в любом месте', () => {
-    denied(checkWritePath(project, '.mcp.json'), /\.mcp\.json/)
-    denied(checkWritePath(project, 'sub/.mcp.json'), /\.mcp\.json/)
-  })
-  test('CLAUDE.md и файлы с "claude" в имени — можно', () => {
-    ok(checkWritePath(project, 'CLAUDE.md'))
-    ok(checkWritePath(project, 'src/claude.ts'))
-  })
-  test('.env* — нельзя', () => {
-    denied(checkWritePath(project, '.env.local'), /\.env/)
-    denied(checkWritePath(project, '.env'), /\.env/)
-    denied(checkWritePath(project, join(project, 'src', '.env.production')), /\.env/)
-  })
-  test('пустой путь и сам каталог проекта — нельзя', () => {
-    denied(checkWritePath(project, ''))
-    denied(checkWritePath(project, undefined))
-    denied(checkWritePath(project, project))
+  test('on custom ports both modes follow the env: dev (UI port) and packaged (server port)', () => {
+    const securityUrl = new URL('./security.ts', import.meta.url).href
+    const script = `
+      import { checkWsUpgrade, checkApiRequest } from ${JSON.stringify(securityUrl)}
+      const v = (x) => x.ok
+      console.log(JSON.stringify({
+        dev: v(checkWsUpgrade({ host: 'localhost:5384', origin: 'http://localhost:5384' })),
+        packaged: v(checkApiRequest({ host: '127.0.0.1:5385', origin: 'http://127.0.0.1:5385' })),
+        defaultServerOrigin: v(checkApiRequest({ host: '127.0.0.1:5385', origin: 'http://127.0.0.1:5175' })),
+        defaultUiOrigin: v(checkWsUpgrade({ host: '127.0.0.1:5385', origin: 'http://localhost:5174' })),
+      }))`
+    const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+      env: { ...process.env, LD_UI_PORT: '5384', LD_SERVER_PORT: '5385' },
+      encoding: 'utf8',
+    })
+    assert.equal(r.status, 0, r.stderr)
+    assert.deepEqual(JSON.parse(r.stdout), {
+      dev: true,
+      packaged: true,
+      defaultServerOrigin: false,
+      defaultUiOrigin: false,
+    })
   })
 })
+
+describe('/api/shutdown: local tools only', () => {
+  test('a non-browser client (the MCP process: no Origin, no Sec-Fetch-Site) passes', () => {
+    ok(checkShutdownRequest({ host: serverHost }))
+  })
+  test('a same-origin page (the demo on the server port) is refused', () => {
+    denied(
+      checkShutdownRequest({ host: serverHost, origin: `http://127.0.0.1:${SERVER_PORT}`, 'sec-fetch-site': 'same-origin' }),
+      /local tools only/,
+    )
+    denied(checkShutdownRequest({ host: serverHost, 'sec-fetch-site': 'same-origin' }), /local tools only/)
+    denied(checkShutdownRequest({ host: serverHost, origin: `http://127.0.0.1:${SERVER_PORT}` }), /local tools only/)
+  })
+  test('the window origins and foreign hosts are refused too', () => {
+    denied(checkShutdownRequest({ host: serverHost, origin: uiOrigin }), /local tools only/)
+    denied(checkShutdownRequest({ host: `evil.example:${SERVER_PORT}` }), /Host/)
+  })
+})
+
+describe('resolveStaticPath', () => {
+  const root = resolve('/srv/ui')
+  test('names a file under the root', () => {
+    assert.equal(resolveStaticPath(root, 'index.html'), join(root, 'index.html'))
+    assert.equal(resolveStaticPath(root, 'assets/app-1a2b.js'), join(root, 'assets', 'app-1a2b.js'))
+    assert.equal(resolveStaticPath(root, 'assets/my%20file.css'), join(root, 'assets', 'my file.css'))
+  })
+  test('the root itself is not a file', () => {
+    assert.equal(resolveStaticPath(root, ''), null)
+    assert.equal(resolveStaticPath(root, '/'), null)
+  })
+  test('.. and encoded .. are refused', () => {
+    for (const rel of ['../secret.txt', 'assets/../../x', '%2e%2e/x', '..%2fx', 'a/%2E%2E/%2E%2E/x']) {
+      assert.equal(resolveStaticPath(root, rel), null, rel)
+    }
+  })
+  test('backslashes, drive letters, streams and NUL are refused', () => {
+    for (const rel of ['..\\x', 'a%5c..%5cx', 'C:/Windows/win.ini', 'index.html::$DATA', 'a%00.html']) {
+      assert.equal(resolveStaticPath(root, rel), null, rel)
+    }
+  })
+  test('Windows device names are refused in any case, with any extension, in any directory', () => {
+    for (const rel of ['con', 'NUL', 'nul.html', 'aux.txt', 'assets/com1.js', 'LPT9', 'prn.', 'con .html', 'CONIN$']) {
+      assert.equal(resolveStaticPath(root, rel), null, rel)
+    }
+  })
+  test('names that only start like a device name are fine', () => {
+    assert.equal(resolveStaticPath(root, 'console.js'), join(root, 'console.js'))
+    assert.equal(resolveStaticPath(root, 'com10.txt'), join(root, 'com10.txt'))
+    assert.equal(resolveStaticPath(root, 'auxiliary.css'), join(root, 'auxiliary.css'))
+  })
+  test('malformed percent-encoding is refused, not thrown', () => {
+    assert.equal(resolveStaticPath(root, '%E0%A4%A'), null)
+  })
+})
+

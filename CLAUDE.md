@@ -47,7 +47,18 @@ The core is a **normalized snapshot**: both adapters return the same format, so 
 - `src/shared/` — protocol types, ports.
 - `demo/` — a bundled demo page; `tests/e2e/` — Playwright suite driving the window and a real MCP client.
 
-Two agent entries over one state: the built-in chat (`@anthropic-ai/claude-agent-sdk`; credentials from `claude login` or `ANTHROPIC_API_KEY`) and MCP for a Claude Code session in a terminal. MCP is pull-only, so the window cannot wake that agent.
+### One agent entry: MCP, for any agent
+
+The tool has no agent of its own. The element chat in the window is answered by whatever agent the user connected over MCP.
+
+MCP is not tied to Claude Code. It must work the same with any MCP client (Claude Code, Claude Desktop, Codex CLI, Cursor, VS Code / Copilot, Devin Desktop, Gemini CLI, Zed) and with the MCP adapters of popular agent SDKs (OpenAI Agents SDK, Vercel AI SDK, LangChain / LangGraph, Claude Agent SDK).
+
+- Only standard MCP over stdio: tools with JSON Schema input and text output. No client-specific extensions, prompts or resources that a tool depends on; no assumptions about which model or client calls it.
+- Tool names, descriptions and results are plain English and self-contained: an agent that never saw the README can use them.
+- Install is light: connecting the MCP downloads only this package, never an agent runtime or model SDK.
+- README setup covers several clients, not only Claude Code; a client-specific config is an example, not the default.
+
+**Listen mode.** MCP is pull-only: the window cannot wake an agent. So when the agent starts a debug session through our tool, the tool result tells it to listen: call the waiting tool, which returns as soon as the user sends a message or an edit from the window. The agent does the work, answers in the window, and waits again until the user ends the session. The waiting tool returns before common client tool-call timeouts, so the agent simply calls it again. The window shows whether an agent is listening; when none is, a sent message stays in the Inbox and the window says how to connect one.
 
 Why it is built this way:
 
@@ -73,4 +84,5 @@ npm run build
 - No silent failures: adb missing, no device, empty dump, agent not attached, target not responding — each shows a visible message with the cause and the next step.
 - No tool code in the target's release build: Android agent is `debugImplementation` only, a web build plugin is serve-only.
 - Device, ports and project paths are configuration (`layout-debug.config.json`, `LD_*` env), not hard-coded.
-- Every new endpoint or agent tool goes through `src/server/security.ts` and the agent's write guard.
+- Every new endpoint or MCP tool goes through `src/server/security.ts`.
+- Page data (class names, text, anchors, user comments) reaches the agent as marked, length-capped data, never as instructions.

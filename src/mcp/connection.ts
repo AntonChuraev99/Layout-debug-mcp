@@ -4,8 +4,27 @@
  * stdio at import time) so the wording can be unit-tested.
  */
 import { DEFAULT_SERVER_PORT } from '../shared/ports.ts'
+import { WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS, WAIT_MIN_SECONDS } from '../shared/wait.ts'
 
 type Env = Record<string, string | undefined>
+
+/**
+ * Default timeout of wait_for_message: LD_WAIT_SECONDS when it is a whole number
+ * from 5 to 50, else 40. A bad value is reported (stderr, never stdout) rather than
+ * silently replaced: `warning` is set then.
+ */
+export function resolveWaitSeconds(env: Env): { seconds: number; warning?: string } {
+  const raw = env.LD_WAIT_SECONDS?.trim()
+  if (!raw) return { seconds: WAIT_DEFAULT_SECONDS }
+  const n = /^\d+$/.test(raw) ? Number(raw) : NaN
+  if (Number.isInteger(n) && n >= WAIT_MIN_SECONDS && n <= WAIT_MAX_SECONDS) return { seconds: n }
+  return {
+    seconds: WAIT_DEFAULT_SECONDS,
+    warning:
+      `[layout-debug] LD_WAIT_SECONDS="${env.LD_WAIT_SECONDS}" is not a whole number from ${WAIT_MIN_SECONDS} ` +
+      `to ${WAIT_MAX_SECONDS}; wait_for_message uses ${WAIT_DEFAULT_SECONDS} s`,
+  }
+}
 
 /** `LD_SERVER_URL` wins when set and non-blank (same convention as the other LD_* vars). */
 export function resolveServerBase(env: Env, serverPort: number): string {
@@ -25,7 +44,7 @@ export function unreachableMessage(base: string, reason: string, env: Env): stri
   if (url) {
     lines.push(
       `This MCP process takes the address from LD_SERVER_URL=${url}. ` +
-        'Check that the server listens there (npm run dev prints "[layout-debug] server http://...").',
+        'Check that the server listens there (it prints "[layout-debug] server http://..." on start).',
     )
   } else if (port) {
     lines.push(
@@ -40,6 +59,9 @@ export function unreachableMessage(base: string, reason: string, env: Env): stri
         'then restart the client session.',
     )
   }
-  lines.push('If the server is not running: npm run dev in the layout-debug-mcp directory, and keep it running.')
+  lines.push(
+    'If the server is not running: call open_window, which starts it ' +
+      '(in a layout-debug-mcp checkout, npm run dev starts it too).',
+  )
   return lines.join('\n')
 }

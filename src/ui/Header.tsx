@@ -42,6 +42,11 @@ interface Props {
   inboxOpen: boolean
   onInboxToggle: (open: boolean) => void
   inboxContent: ReactNode
+  /** Null while the server is out of reach: nobody can tell whether an agent listens. */
+  agent: { listening: boolean } | null
+  agentOpen: boolean
+  onAgentToggle: (open: boolean) => void
+  agentContent: ReactNode
   status: StatusInfo | null
   statusOpen: boolean
   onStatusToggle: (open: boolean) => void
@@ -53,7 +58,9 @@ export function Header(p: Props) {
   const { t } = p
   const inboxRef = useRef<HTMLButtonElement | null>(null)
   const statusRef = useRef<HTMLButtonElement | null>(null)
+  const agentRef = useRef<HTMLButtonElement | null>(null)
   const web = p.target === 'web'
+  const agentText = p.agent?.listening ? t('agent.listening') : t('agent.none')
 
   return (
     <header className="tb">
@@ -103,6 +110,28 @@ export function Header(p: Props) {
       )}
 
       <span className="tb__spacer" />
+
+      {p.agent && (
+        <div className="tb__anchor">
+          <button
+            ref={agentRef}
+            type="button"
+            className={`agent${p.agent.listening ? ' agent--on' : ''}${p.agentOpen ? ' is-open' : ''}`}
+            aria-expanded={p.agentOpen}
+            aria-haspopup="dialog"
+            onClick={() => p.onAgentToggle(!p.agentOpen)}
+          >
+            <span className="agent__dot" aria-hidden="true" />
+            {/* Announced on change: the indicator is the only place that says it. */}
+            <span aria-live="polite">{agentText}</span>
+          </button>
+          {p.agentOpen && (
+            <Popover anchorRef={agentRef} onClose={() => p.onAgentToggle(false)} label={agentText} className="pop--agent">
+              {p.agentContent}
+            </Popover>
+          )}
+        </div>
+      )}
 
       <div className="tb__anchor">
         <button

@@ -14,8 +14,8 @@ import {
   fmt,
   fmtSigned,
   finishedBetween,
-  progressSteps,
   requestStatus,
+  shortenPaths,
   sameElement,
   threadFor,
   unownedMessages,
@@ -168,7 +168,7 @@ describe('server-reported status', () => {
     assert.equal(requestStatus(r, analyzeChat(chat, [r]), ctx(at('r1', 'working'))), 'work')
     assert.equal(requestStatus(r, analyzeChat([], [r]), ctx(at('r1', 'done'))), 'done')
     assert.equal(requestStatus(r, analyzeChat([], [r]), ctx(at('r1', 'queued'))), 'queued')
-    assert.equal(requestStatus(r, analyzeChat([], [r]), ctx(at('r1', 'error', 'agent_auth'))), 'error')
+    assert.equal(requestStatus(r, analyzeChat([], [r]), ctx(at('r1', 'error', 'agent_failed'))), 'error')
   })
 
   test('working из очереди MCP до открытия окна — stale; встроенный агент — work', () => {
@@ -211,8 +211,8 @@ describe('applyStatusEvent / seedStatuses', () => {
     const a = applyStatusEvent(empty, { id: 'r1', status: 'working' })
     assert.deepEqual(a.get('r1'), { status: 'working', code: undefined, message: undefined })
     assert.equal(applyStatusEvent(a, { id: 'r1', status: 'working' }), a)
-    const b = applyStatusEvent(a, { id: 'r1', status: 'error', code: 'agent_auth', message: 'no key' })
-    assert.deepEqual(b.get('r1'), { status: 'error', code: 'agent_auth', message: 'no key' })
+    const b = applyStatusEvent(a, { id: 'r1', status: 'error', code: 'agent_failed', message: 'build broke' })
+    assert.deepEqual(b.get('r1'), { status: 'error', code: 'agent_failed', message: 'build broke' })
     assert.equal(a.get('r1')!.status, 'working', 'the previous map is not mutated')
   })
 
@@ -258,16 +258,12 @@ describe('finishedBetween', () => {
   })
 })
 
-describe('progressSteps / unownedMessages', () => {
-  test('шаги — только tool-строки запроса, путь от корня проекта', () => {
-    const chat: ChatMessage[] = [
-      { id: 'r1', role: 'user', text: 'x' },
-      { id: 'r1-reply-Read C:\\proj\\src\\A.tsx', role: 'system', text: '→ Read C:\\proj\\src\\A.tsx' },
-      { id: 'r2-reply-Edit b', role: 'system', text: '→ Edit b' },
-      { id: 'r1-reply-Edit C:/proj/src/A.tsx', role: 'system', text: '→ Edit C:/proj/src/A.tsx' },
-    ]
-    assert.deepEqual(progressSteps(chat, 'r1', 'C:\\proj'), ['Read src/A.tsx', 'Edit src/A.tsx'])
-    assert.deepEqual(progressSteps(chat, 'r1', null), ['Read C:\\proj\\src\\A.tsx', 'Edit C:/proj/src/A.tsx'])
+describe('shortenPaths / unownedMessages', () => {
+  test('пути внутри проекта — от его корня, все вхождения; без projectDir текст как есть', () => {
+    const reply = 'Edited C:\\proj\\src\\A.tsx and C:/proj/src/B.css; left D:/other/C.ts'
+    assert.equal(shortenPaths(reply, 'C:\\proj'), 'Edited src/A.tsx and src/B.css; left D:/other/C.ts')
+    assert.equal(shortenPaths(reply, null), reply)
+    assert.equal(shortenPaths('Read C:\\proj\\src\\A.tsx', 'C:\\proj'), 'Read src/A.tsx')
   })
   test('без хозяина — не пользовательские сообщения вне запросов', () => {
     const requests = [req('r1', 'h2')]

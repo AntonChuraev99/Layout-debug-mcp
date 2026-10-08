@@ -6,8 +6,6 @@ import { androidStateFor, errorRoute, rejectsSubmit, resolveRequestErrors } from
 const ALL: ErrorCode[] = [
   'bad_message',
   'nothing_selected',
-  'agent_auth',
-  'agent_retrying',
   'agent_failed',
   'device_no_adb',
   'device_not_found',
@@ -25,13 +23,7 @@ describe('errorRoute', () => {
     }
   })
 
-  test('a retry is never a failure, with or without a request', () => {
-    assert.equal(errorRoute('agent_retrying', 'r1'), 'retrying')
-    assert.equal(errorRoute('agent_retrying', undefined), 'retrying')
-  })
-
   test('agent errors land on their request; without an id they are general', () => {
-    assert.equal(errorRoute('agent_auth', 'r1'), 'request')
     assert.equal(errorRoute('agent_failed', 'r1'), 'request')
     assert.equal(errorRoute('agent_failed', undefined), 'general')
   })
@@ -45,7 +37,7 @@ describe('errorRoute', () => {
 
   test('the routing does not depend on the localized text: every code has exactly one route', () => {
     const routes = new Set(ALL.map((c) => errorRoute(c, 'r1')))
-    assert.deepEqual([...routes].sort(), ['capture', 'general', 'request', 'retrying'])
+    assert.deepEqual([...routes].sort(), ['capture', 'general', 'request'])
   })
 })
 
@@ -91,8 +83,8 @@ describe('resolveRequestErrors', () => {
   })
 
   test('no frame in this window (opened after the failure) — the status text', () => {
-    const map = resolveRequestErrors([], st({ r1: { status: 'error', code: 'agent_auth', message: 'no key' } }), 'en', fallback)
-    assert.deepEqual(map.get('r1'), { code: 'agent_auth', message: 'no key' })
+    const map = resolveRequestErrors([], st({ r1: { status: 'error', code: 'agent_failed', message: 'build broke' } }), 'en', fallback)
+    assert.deepEqual(map.get('r1'), { code: 'agent_failed', message: 'build broke' })
   })
 
   test('a frame from before a language switch is replaced with the window wording', () => {
@@ -110,14 +102,14 @@ describe('resolveRequestErrors', () => {
       [
         { requestId: 'r1', code: 'agent_failed', message: 'first', locale: 'en' },
         { code: 'live_edit', message: 'general', locale: 'en' },
-        { requestId: 'r1', code: 'agent_auth', message: 'second', locale: 'en' },
+        { requestId: 'r1', code: 'agent_failed', message: 'second', locale: 'en' },
       ],
       st({}),
       'en',
       fallback,
     )
     assert.deepEqual([...map.keys()], ['r1'])
-    assert.deepEqual(map.get('r1'), { code: 'agent_auth', message: 'second' })
+    assert.deepEqual(map.get('r1'), { code: 'agent_failed', message: 'second' })
   })
 
   test('an error status with no text anywhere still gets a message', () => {

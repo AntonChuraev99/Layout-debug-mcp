@@ -58,7 +58,8 @@ const TSX = bin('tsx')
  */
 const tasks = [
   { name: 'inspector', args: [VITE, 'build', '--config', 'vite.inspector.config.ts', '--watch', '--logLevel', 'warn'] },
-  { name: 'server', args: [TSX, 'watch', 'src/server/index.ts'], watched: true },
+  // LD_DEV=1: the window lives on Vite (LD_UI_PORT), not on the server's own port.
+  { name: 'server', args: [TSX, 'watch', 'src/server/index.ts'], watched: true, env: { LD_DEV: '1' } },
   { name: 'ui', args: [VITE] },
 ]
 
@@ -115,6 +116,7 @@ const children = tasks.map((task) => {
   const prefix = `[${task.name}] `
   const child = spawn(process.execPath, task.args, {
     cwd: ROOT,
+    env: { ...process.env, ...task.env },
     stdio: ['ignore', 'pipe', 'pipe'],
     // POSIX: own process group, so the whole tree can be signalled at once.
     detached: !IS_WIN,

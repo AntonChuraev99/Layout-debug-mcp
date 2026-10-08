@@ -9,6 +9,9 @@ import {
   frameOf,
   inboxCard,
   markOver,
+  NO_AGENT_CHAT,
+  NO_AGENT_INBOX,
+  noAgentListening,
   openInbox,
   openWindow,
   palette,
@@ -21,10 +24,14 @@ import {
   serverRequests,
   test,
   waitForServerSnapshot,
+  waitUntilNotListening,
+  WAITING_LINE,
 } from './helpers'
 
 test.beforeEach(async () => {
   await clearQueue()
+  // These tests send with nobody listening; an agent of an earlier test may still be in its grace period.
+  await waitUntilNotListening()
 })
 
 test('10 chat: Enter sends → queued mark and inbox card; empty Enter only hints', async ({ page }) => {
@@ -36,8 +43,9 @@ test('10 chat: Enter sends → queued mark and inbox card; empty Enter only hint
   const chat = chatDialog(page)
   const input = chat.getByRole('textbox', { name: 'Message to the agent' })
   await expect(input).toBeFocused()
-  // No project configured for the e2e server: the window says edits go to the MCP queue.
-  await expect(chat.getByText(/No agent is connected in the window/)).toBeVisible()
+  // Nobody calls wait_for_message: the window says messages wait in the Inbox.
+  await expect(noAgentListening(page)).toBeVisible()
+  await expect(chat.getByText(NO_AGENT_CHAT)).toBeVisible()
 
   await input.press('Enter')
   await expect(chat.getByText('Describe the edit first')).toBeVisible()
@@ -46,13 +54,14 @@ test('10 chat: Enter sends → queued mark and inbox card; empty Enter only hint
   const comment = `e2e-10 make the button wider ${Date.now()}`
   await sendFromChat(page, comment)
   await expect(input).toHaveValue('')
-  await expect(chat.getByRole('log')).toContainText('Added to the queue; the agent picks it up via pending_requests')
+  await expect(chat.getByRole('log')).toContainText(WAITING_LINE)
   await expect.poll(async () => (await serverRequests()).map((r) => r.comment)).toEqual([comment])
 
   await expect.poll(async () => Boolean(await markOver(page, 'queued', cta)), { message: 'queued mark over the button' }).toBe(true)
   await expect(page.getByRole('button', { name: /^Inbox: 1 open/ })).toBeVisible()
   const inbox = await openInbox(page)
-  await expect(inboxCard(inbox, comment)).toContainText('Queued')
+  await expect(inboxCard(inbox, comment)).toContainText('Waiting for agent')
+  await expect(inbox.getByText(NO_AGENT_INBOX)).toBeVisible()
 })
 
 test('10b the palette field: C focuses it, Enter sends and opens the chat; empty Enter and Escape keep things as they are', async ({ page }) => {
@@ -182,7 +191,7 @@ test('18 two windows see the same queue', async ({ page, context }) => {
   // The second window learns about it without a reload.
   await expect(other.getByRole('button', { name: /^Inbox: 1 open/ })).toBeVisible()
   const inbox = await openInbox(other)
-  await expect(inboxCard(inbox, comment)).toContainText('Queued')
+  await expect(inboxCard(inbox, comment)).toContainText('Waiting for agent')
   const otherCta = frameOf(other).getByTestId('cta-continue')
   await expect.poll(async () => Boolean(await markOver(other, 'queued', otherCta))).toBe(true)
 

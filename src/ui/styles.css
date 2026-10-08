@@ -625,6 +625,48 @@ kbd {
   cursor: default;
 }
 
+/* Agent indicator. Listening is the normal state, so it stays quiet: grey text, a small
+   green dot. Nobody listening is not an error either (sending still queues), so it gets no
+   colour — only a hollow dot and a visible edge, enough to be found and clicked. */
+.agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  border: 1px solid var(--line-strong);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--fg-2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.agent:hover,
+.agent.is-open {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+.agent:focus-visible {
+  outline: 2px solid var(--ink-fg);
+  outline-offset: 2px;
+}
+.agent__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--fg-3);
+  flex-shrink: 0;
+}
+.agent--on {
+  border-color: transparent;
+}
+.agent--on .agent__dot {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(76, 195, 138, 0.18);
+}
+
 /* --- popovers -------------------------------------------------------------- */
 
 .pop {
@@ -694,6 +736,20 @@ kbd {
   overflow-wrap: anywhere;
   color: var(--fg);
 }
+.codeblock__prose {
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 18px;
+}
+.pop--agent .codeblock .mono {
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+}
+/* The multi-line config: the copy button stays at its first line. */
+.pop--agent .codeblock:has(.mono) {
+  align-items: flex-start;
+}
 .codeblock__copy.is-ok {
   color: var(--ok);
 }
@@ -716,6 +772,49 @@ kbd {
 .pop .steps {
   font-size: 12px;
   line-height: 18px;
+}
+
+/* How to connect an agent: two real steps, each a label over the thing to copy. */
+.pop--agent {
+  width: 380px;
+}
+.agent-steps {
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: agent-step;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.agent-steps li {
+  counter-increment: agent-step;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.agent-steps__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg);
+}
+.agent-steps__label::before {
+  content: counter(agent-step);
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+  color: var(--ink-fg);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 /* --- inbox ----------------------------------------------------------------- */
@@ -776,6 +875,26 @@ kbd {
   min-width: 28px;
   padding: 0 6px;
   font-weight: 500;
+}
+/* Queued edits with nobody listening: one line under the head, with the way out. */
+.inbox__agent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg-2);
+}
+.inbox__agent svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.inbox__agent-text {
+  flex: 1;
+  min-width: 0;
 }
 .inbox__scroll {
   overflow: auto;
@@ -881,31 +1000,6 @@ kbd {
   overflow: hidden;
   color: var(--fg-2);
   overflow-wrap: anywhere;
-}
-.rcard__steps {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 2px;
-}
-.rcard__step {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--fg-3);
-  min-width: 0;
-}
-.rcard__step svg {
-  flex-shrink: 0;
-  color: var(--fg-3);
-}
-.rcard__step .mono {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rcard__step.shimmer-text .mono {
-  color: transparent;
 }
 .rcard__error {
   font-size: 12px;
@@ -2067,21 +2161,6 @@ dd.facts__wide {
 .msg--agent .shimmer-text {
   line-height: 20px;
 }
-.msg--tool {
-  align-items: center;
-  gap: 6px;
-  padding-left: 28px;
-  color: var(--fg-3);
-  margin-bottom: -6px;
-}
-.msg--tool svg {
-  flex-shrink: 0;
-}
-.msg--tool .mono {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .msg--system {
   justify-content: center;
   align-items: flex-start;
@@ -2105,34 +2184,40 @@ dd.facts__wide {
   text-wrap: pretty;
   overflow-wrap: anywhere;
 }
-/* The agent's API call is being retried: informational, quieter than any reply. */
-.msg--retry {
-  color: var(--fg-3);
-  font-style: italic;
+/* Sent with no agent listening: it waits, it did not fail — the colour of any other note. */
+.msg--waiting {
+  justify-content: flex-start;
+  color: var(--fg-2);
+  /* Two lines in Russian: centred text would leave the icon stranded at the left edge. */
+  text-align: left;
+  text-wrap: pretty;
 }
-.notice--danger {
-  background: var(--danger-soft);
-  color: var(--danger-fg);
+/* "No agent listening" above the thread: sending still works, so muted, not a warning. */
+.notice--agent {
+  align-items: flex-start;
 }
-.notice__body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.notice__text {
+  flex: 1;
   min-width: 0;
 }
-.notice__title {
-  font-weight: 600;
-}
-.notice code,
-.rcard__hint code {
-  font-family: var(--mono);
-  color: var(--fg);
-}
-.rcard__hint {
+
+/* A text action inside a line of copy: reads as a link, behaves as a button. */
+.link-btn {
+  flex-shrink: 0;
   font-size: 12px;
   line-height: 16px;
-  color: var(--fg-2);
-  overflow-wrap: anywhere;
+  font-weight: 600;
+  color: var(--ink-fg);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+}
+.link-btn:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link-btn:focus-visible {
+  outline: 2px solid var(--ink-fg);
+  outline-offset: 2px;
 }
 .chat__compose {
   padding: 10px;

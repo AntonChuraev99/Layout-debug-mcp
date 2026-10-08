@@ -8,6 +8,7 @@ import {
   type UiToInspector,
 } from '../shared/protocol.ts'
 import { isKeyMessage } from '../inspector/keys.ts'
+import { frameOrigin } from './origins.ts'
 
 /** Boxes reappear only this long after the page's last scroll (with the fresh snapshot). */
 const SCROLL_SETTLE_MS = 90
@@ -24,6 +25,28 @@ export interface TargetEvents {
 }
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/** Origins already reported as unusable, so a drag does not print one warning per pixel. */
+const warnedOrigins = new Set<string>()
+
+/**
+ * Commands go to the frame's own origin, never `*`: if the frame navigated to another site,
+ * the browser drops the message instead of handing live-edit commands to that site.
+ */
+function postTo(frame: HTMLIFrameElement | null, msg: UiToInspector) {
+  const win = frame?.contentWindow
+  if (!frame || !win) return
+  const origin = frameOrigin(frame.src)
+  if (!origin) {
+    // The status pill already says the inspector does not answer; this says why.
+    if (!warnedOrigins.has(frame.src)) {
+      warnedOrigins.add(frame.src)
+      console.warn(`[layout-debug] the frame address ${JSON.stringify(frame.src)} has no http(s) origin; the inspector can't be reached there`)
+    }
+    return
+  }
+  win.postMessage(msg, origin)
+}
 
 /**
  * Bridge to the inspector running inside the target page. Cross-origin by
@@ -43,20 +66,24 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>, 
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
+      // Only the page in the frame, and only from the address the window opened there: a page
+      // that navigated the frame elsewhere, or any other window, cannot feed keys or snapshots.
+      const frame = iframeRef.current
+      if (!frame || event.source !== frame.contentWindow) return
+      const origin = frameOrigin(frame.src)
+      if (!origin || event.origin !== origin) return
+
       if (isKeyMessage(event.data)) {
         // A window key pressed while focus sits in the live page. Replayed as a keydown on
         // the window, so the one key handler in App applies all its guards (open chat,
         // Escape order, nudge on or off) exactly as for a key typed here.
-        if (event.source === iframeRef.current?.contentWindow) {
-          const { key, shift } = event.data
-          const code = key.length === 1 ? `Key${key.toUpperCase()}` : key
-          window.dispatchEvent(new KeyboardEvent('keydown', { key, code, shiftKey: Boolean(shift), cancelable: true }))
-        }
+        const { key, shift } = event.data
+        const code = key.length === 1 ? `Key${key.toUpperCase()}` : key
+        window.dispatchEvent(new KeyboardEvent('keydown', { key, code, shiftKey: Boolean(shift), cancelable: true }))
         return
       }
       const data = event.data as InspectorToUi | undefined
       if (!data || typeof data !== 'object' || data.tag !== PROTOCOL_TAG || data.from !== 'inspector') return
-      if (event.source !== iframeRef.current?.contentWindow) return
 
       switch (data.t) {
         case 'hello':
@@ -92,10 +119,7 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>, 
           // we've lost their ids, so the first snapshot resets the page.
           if (!syncedRef.current) {
             syncedRef.current = true
-            iframeRef.current?.contentWindow?.postMessage(
-              { tag: PROTOCOL_TAG, from: 'ui', t: 'clearAllOverrides' } satisfies UiToInspector,
-              '*',
-            )
+            postTo(iframeRef.current, { tag: PROTOCOL_TAG, from: 'ui', t: 'clearAllOverrides' })
           }
           break
         case 'error':
@@ -111,9 +135,7 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>, 
   }, [iframeRef, events])
 
   const send = useCallback(
-    (msg: UiToInspector) => {
-      iframeRef.current?.contentWindow?.postMessage(msg, '*')
-    },
+    (msg: UiToInspector) => postTo(iframeRef.current, msg),
     [iframeRef],
   )
 

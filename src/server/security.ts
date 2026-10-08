@@ -1,7 +1,6 @@
-import { lstatSync, readlinkSync, realpathSync } from 'node:fs'
 import type { IncomingHttpHeaders } from 'node:http'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { SERVER_PORT, UI_ORIGINS, UI_PORT } from '../shared/ports.ts'
+import { join, relative, resolve, sep, isAbsolute } from 'node:path'
+import { SERVER_PORT, UI_PORT, WINDOW_ORIGINS } from '../shared/ports.ts'
 
 /**
  * Pure checks behind the server's trust boundary. Kept free of I/O on the
@@ -48,11 +47,11 @@ export function checkHost(headers: Headers): Verdict {
 export function checkOrigin(headers: Headers): Verdict {
   const origin = header(headers, 'origin')
   if (origin === undefined) return OK
-  if (UI_ORIGINS.includes(origin)) return OK
-  return deny(`Origin "${origin}" is not the layout-debug window (allowed: ${UI_ORIGINS.join(', ')})`)
+  if (WINDOW_ORIGINS.includes(origin)) return OK
+  return deny(`Origin "${origin}" is not the layout-debug window (allowed: ${WINDOW_ORIGINS.join(', ')})`)
 }
 
-/** WebSocket `/ws`: the chat, the agent and the device live behind it. */
+/** WebSocket `/ws`: the chat, the request queue and the device live behind it. */
 export function checkWsUpgrade(headers: Headers): Verdict {
   const host = checkHost(headers)
   return host.ok ? checkOrigin(headers) : host
@@ -61,7 +60,8 @@ export function checkWsUpgrade(headers: Headers): Verdict {
 /**
  * HTTP `/api/*`. On top of Host and Origin: a cross-site GET (`<img src>`) carries
  * no Origin, but modern browsers label it with Sec-Fetch-Site. The window itself
- * reaches the API through the Vite proxy, so it is always `same-origin`.
+ * reaches the API from the server's own origin (package) or through the Vite proxy
+ * (dev), so it is always `same-origin`.
  */
 export function checkApiRequest(headers: Headers): Verdict {
   const base = checkWsUpgrade(headers)
@@ -73,83 +73,63 @@ export function checkApiRequest(headers: Headers): Verdict {
   return OK
 }
 
-/** `/inspector.js`, `/demo`: public static, loaded from any page — only Host matters. */
+/**
+ * POST /api/shutdown: stops the whole server, so it is for local non-browser clients
+ * only (open_window replacing a stale server). The demo page is same-origin with the
+ * API in the package and would pass checkApiRequest; any browser request carries
+ * Origin (POST) or Sec-Fetch-Site, the MCP process sends neither.
+ */
+export function checkShutdownRequest(headers: Headers): Verdict {
+  const base = checkApiRequest(headers)
+  if (!base.ok) return base
+  if (header(headers, 'origin') !== undefined || header(headers, 'sec-fetch-site') !== undefined) {
+    return deny('/api/shutdown is for local tools only, not for browser pages')
+  }
+  return OK
+}
+
+/**
+ * `/inspector.js`, `/demo`, the window's own files: public static, loaded from any
+ * page — only Host matters (it is what stops DNS rebinding from reading them).
+ */
 export function checkStaticRequest(headers: Headers): Verdict {
   return checkHost(headers)
 }
 
-// --- where the agent may write ----------------------------------------------
+// --- which file a static path names ----------------------------------------
 
 /**
- * Canonical path of `p`, following symlinks and junctions even when the file
- * itself does not exist yet: the nearest existing ancestor is resolved and the
- * missing tail is appended. A dangling link is followed to where it points,
- * since that is where a write would land.
+ * Windows opens a device instead of a file for these names in any directory and
+ * with any extension (`nul.html`, `COM1.txt`), and ignores trailing dots and spaces.
  */
-function resolveReal(p: string, hops = 0): string | null {
-  if (hops > 64) return null
-  try {
-    return realpathSync.native(p)
-  } catch {
-    // does not exist (yet) or is a dangling link — handled below
-  }
-  try {
-    if (lstatSync(p).isSymbolicLink()) return resolveReal(resolve(dirname(p), readlinkSync(p)), hops + 1)
-  } catch {
-    // nothing at p at all
-  }
-  const parent = dirname(p)
-  if (parent === p) return null
-  const realParent = resolveReal(parent, hops + 1)
-  return realParent === null ? null : join(realParent, basename(p))
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])$/i
+
+function isReservedSegment(segment: string): boolean {
+  const stem = segment.replace(/[. ]+$/, '').split('.')[0]!.trim()
+  return WINDOWS_RESERVED.test(stem)
 }
 
 /**
- * Windows treats `.git.`, `.git ` and `.git::$INDEX_ALLOCATION` as `.git`, and
- * NTFS is case-insensitive. Normalizing the same way everywhere only ever
- * makes the deny list stricter.
+ * The file under `root` that the URL path `rel` names, or null when it names
+ * nothing servable: `..` segments, NUL bytes, drive letters or alternate data
+ * streams (`:`), backslashes, Windows device names, or a result outside `root`.
+ * Pure (no file system access), so it is tested directly.
  */
-function normalizeSegment(segment: string): string {
-  return segment.split(':')[0]!.replace(/[. ]+$/, '').toLowerCase()
-}
-
-/**
- * Where the chat agent may write: inside `projectDir` after resolving symlinks,
- * never into `.git/` or `.claude/`, never `.mcp.json` or `.env*`.
- */
-export function checkWritePath(projectDir: string, target: unknown): Verdict {
-  if (typeof target !== 'string' || !target.trim()) return deny('no file path given')
-  // `a/link/../b` means different files lexically and on disk; refuse the ambiguity.
-  if (target.split(/[\\/]+/).includes('..')) return deny(`paths with ".." are not accepted: ${target}`)
-
-  let root: string
+export function resolveStaticPath(root: string, rel: string): string | null {
+  let decoded: string
   try {
-    root = realpathSync.native(projectDir)
+    decoded = decodeURIComponent(rel)
   } catch {
-    return deny(`projectDir is not accessible: ${projectDir}`)
+    return null
   }
-
-  const real = resolveReal(resolve(root, target))
-  if (real === null) return deny(`could not resolve the path: ${target}`)
-
-  const rel = relative(root, real)
-  if (!rel) return deny('the path points at the project directory itself, not at a file')
-  if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) {
-    return deny(`${target} is outside the project (${root}); writes are allowed only inside it`)
-  }
-
-  const segments = rel.split(sep).map(normalizeSegment)
-  if (segments.includes('.git')) return deny(`${target}: .git/ is internal, the agent may not write there`)
-  // The agent loads project settings on every run: a hook or MCP server written
-  // here would run as a command next time, past the Bash ban.
-  if (segments.includes('.claude')) {
-    return deny(`${target}: .claude/ holds Claude Code settings and hooks, the agent may not write there`)
-  }
-  if (segments.includes('.mcp.json')) {
-    return deny(`${target}: .mcp.json registers MCP servers (runs commands), the agent may not change it`)
-  }
-  if (segments[segments.length - 1]!.startsWith('.env')) {
-    return deny(`${target}: .env* files hold environment secrets, the agent may not change them`)
-  }
-  return OK
+  if (/[\0\\:]/.test(decoded)) return null
+  const segments = decoded.split('/').filter((s) => s !== '' && s !== '.')
+  if (segments.some((s) => s === '..' || isReservedSegment(s))) return null
+  const base = resolve(root)
+  const file = resolve(base, join(...(segments.length ? segments : ['.'])))
+  const inside = relative(base, file)
+  // `root` itself is a directory, never a file to serve.
+  if (inside === '' || isAbsolute(inside) || inside === '..' || inside.startsWith(`..${sep}`)) return null
+  return file
 }
+

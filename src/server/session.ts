@@ -13,10 +13,15 @@ import type {
 
 /** Enough to catch up a window that reloaded, small enough to never think about. */
 const CHAT_HISTORY_LIMIT = 200
+const ERROR_MESSAGE_CAP = 500
+
+function capText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
 
 /**
  * Single in-memory session. Written by the UI over the WebSocket, read by the
- * agent bridge and by the MCP server. Deliberately not persisted: overrides and
+ * MCP server over HTTP. Deliberately not persisted: overrides and
  * snapshots describe a running UI and are meaningless once it reloads.
  */
 export class Session {
@@ -26,7 +31,7 @@ export class Session {
   requests: EditRequest[] = []
   /**
    * Kept server-side so the window survives a reload without losing the thread, and
-   * so a Claude Code session working over MCP can post into the same conversation.
+   * so an agent working over MCP can post into the same conversation.
    */
   chat: ChatMessage[] = []
 
@@ -127,6 +132,11 @@ export class Session {
     return flipped
   }
 
+  /** Requests no agent has read yet, oldest first: what `wait_for_message` hands out. */
+  undelivered(): EditRequest[] {
+    return this.requests.filter((r) => !r.consumed && (r.status ?? 'queued') === 'queued')
+  }
+
   /**
    * Moves a request to `status`. Returns false (and changes nothing) for an unknown
    * id, for no change, and for a move away from a finished state: `done` is final,
@@ -160,14 +170,22 @@ export class Session {
    * client that peeked with `markConsumed:false` (or got the id another way) would see
    * the answered request as NEW on its next `pending_requests` and apply it twice.
    */
-  addReply(text: string, role: 'assistant' | 'system', requestId?: string): { message: ChatMessage; matched: boolean } {
+  addReply(
+    text: string,
+    role: 'assistant' | 'system',
+    requestId?: string,
+    outcome: 'done' | 'error' = 'done',
+  ): { message: ChatMessage; matched: boolean } {
     const request = requestId ? this.requests.find((r) => r.id === requestId) : undefined
     const matched = Boolean(request)
     const message: ChatMessage = { id: `mcp-${randomUUID()}`, role, text }
     if (request) {
       message.requestId = request.id
       request.consumed = true
-      this.setStatus(request.id, 'done')
+      // The agent said it could not make the edit: the request closes as an error,
+      // with the agent's own words as the reason (capped, the full text is in the chat).
+      if (outcome === 'error') this.setStatus(request.id, 'error', 'agent_failed', capText(text, ERROR_MESSAGE_CAP))
+      else this.setStatus(request.id, 'done')
     }
     this.addChat(message)
     return { message, matched }

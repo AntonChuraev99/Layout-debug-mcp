@@ -2,7 +2,7 @@ import { DEFAULT_LOCALE, type Locale } from '../shared/protocol.ts'
 
 /**
  * Text the server sends into the window. Everything else the server produces —
- * console logs, MCP responses, the agent prompt, HTTP API errors — is English
+ * console logs, MCP responses, HTTP API errors — is English
  * only; this dictionary covers just what a person reads in the window.
  */
 
@@ -11,17 +11,11 @@ type Params = Record<string, string | number>
 const en = {
   badUiMessage:
     'The server refused a message from the window ({reason}). Reload the window; if it repeats, the window and ' +
-    'the server are from different builds — restart `npm run dev`.',
+    'the server are from different builds — restart the layout-debug server.',
   nothingToSubmit: 'Nothing to send: select an element on the page first',
-  queuedNoProject:
-    'projectDir is not set, so the edit went to the queue. Pick it up from Claude Code with the pending_requests tool.',
-  agentFailed: 'The agent finished with an error',
-  agentAuth:
-    'The agent cannot sign in to the Anthropic API ({reason}). Set ANTHROPIC_API_KEY in the environment of ' +
-    '`npm run dev` or run `claude login`, then restart the server and send the edit again. ' +
-    'Or handle it from a Claude Code session: the pending_requests MCP tool picks the edit up.',
-  agentRetrying:
-    'The Anthropic API did not answer ({reason}), the agent is retrying (attempt {attempt} of {max}). The edit is still in progress.',
+  queuedNoAgent:
+    'No agent is listening, so the edit waits in the Inbox. Ask your agent to open the layout-debug window ' +
+    '(MCP server: npx -y layout-debug-mcp); it picks the edit up from here.',
   deviceError: 'Device: {reason}',
   overrideError: 'Live edit: {reason}',
   clearOverridesError: 'Resetting edits: {reason}',
@@ -34,17 +28,11 @@ export type MessageKey = keyof typeof en
 const ru: Record<MessageKey, string> = {
   badUiMessage:
     'Сервер отклонил сообщение от окна ({reason}). Перезагрузи окно; если повторится — окно и сервер из разных ' +
-    'сборок, перезапусти `npm run dev`.',
+    'сборок, перезапусти сервер layout-debug.',
   nothingToSubmit: 'Нечего отправлять: выдели элемент на странице',
-  queuedNoProject:
-    'projectDir не задан — правка положена в очередь. Забери её из Claude Code инструментом pending_requests.',
-  agentFailed: 'Агент завершился с ошибкой',
-  agentAuth:
-    'Агент не может авторизоваться в Anthropic API ({reason}). Задай ANTHROPIC_API_KEY в окружении ' +
-    '`npm run dev` или выполни `claude login`, перезапусти сервер и отправь правку заново. ' +
-    'Либо обработай её из сессии Claude Code: MCP-инструмент pending_requests заберёт правку.',
-  agentRetrying:
-    'Anthropic API не ответил ({reason}), агент повторяет запрос (попытка {attempt} из {max}). Правка ещё в работе.',
+  queuedNoAgent:
+    'Агент не слушает — правка ждёт во «Входящих». Попроси агента открыть окно layout-debug ' +
+    '(MCP-сервер: npx -y layout-debug-mcp); он заберёт правку отсюда.',
   deviceError: 'Устройство: {reason}',
   overrideError: 'Живая правка: {reason}',
   clearOverridesError: 'Сброс правок: {reason}',

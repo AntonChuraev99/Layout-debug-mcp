@@ -36,10 +36,11 @@ test.afterEach(async () => {
 
 /** The request id `pending_requests` printed for the request with this comment. */
 function idFor(pendingText: string, comment: string): string {
-  const block = pendingText.split('\n\n---\n\n').find((b) => b.includes(`Comment: ${comment}`))
+  // The comment is JSON-quoted on its own line, outside the untrusted page-data block (src/mcp/format.ts).
+  const line = `User comment (typed by the user in the layout-debug window): ${JSON.stringify(comment)}`
+  const block = pendingText.split('\n\n---\n\n').find((b) => b.includes(line))
   expect(block, `pending_requests lists "${comment}"`).toBeDefined()
-  // `requestId: <id>` (contract), `[NEW] <date> — <id>` (older output).
-  const m = /requestId: ([0-9a-f-]{36})/.exec(block!) ?? /— ([0-9a-f-]{36})/.exec(block!)
+  const m = /^requestId: ([0-9a-f-]{36})$/m.exec(block!)
   expect(m, 'request id in the pending_requests output').not.toBeNull()
   return m![1]!
 }

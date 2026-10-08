@@ -21,7 +21,7 @@ const SERVER_PORT = Number(process.env.LD_E2E_SERVER_PORT || 5285)
  * to one module of the window (seen: react-dom_client.js → ERR_CONNECTION_REFUSED), React
  * never mounts and the page stays white. `--dns-result-order=ipv4first` makes Vite bind
  * 127.0.0.1, and the literal URL takes the browser's address choice out of the picture.
- * The server already binds 127.0.0.1 and accepts both origins (UI_ORIGINS).
+ * The server already binds 127.0.0.1 and accepts both origins (WINDOW_ORIGINS).
  */
 const UI_URL = `http://127.0.0.1:${UI_PORT}`
 const IPV4_FIRST = [process.env.NODE_OPTIONS, '--dns-result-order=ipv4first'].filter(Boolean).join(' ')
@@ -48,7 +48,7 @@ export default defineConfig({
     command: 'node scripts/dev.mjs',
     url: UI_URL,
     // Blank LD_* reads as "not set" (src/server/config.ts): a developer's own project dir
-    // in the shell must not switch the real agent on, nor move the default demo target.
+    // or target in the shell must not leak into the suite, nor move the default demo target.
     env: {
       LD_UI_PORT: String(UI_PORT),
       LD_SERVER_PORT: String(SERVER_PORT),

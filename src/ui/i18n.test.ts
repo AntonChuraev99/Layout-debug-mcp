@@ -64,9 +64,9 @@ describe('interpolation', () => {
   })
 
   test('rich puts a node in place of a placeholder', () => {
-    const parts = translateRich('en', 'chat.queued', { tool: 'NODE' })
+    const parts = translateRich('en', 'android.step2', { cmd: 'NODE' })
     assert.equal(parts.length, 3)
-    assert.equal(parts[0], 'Added to the queue; the agent picks it up via ')
+    assert.equal(parts[0], 'Check: ')
     assert.equal((parts[1] as { props: { children: unknown } }).props.children, 'NODE')
   })
 })
@@ -85,14 +85,10 @@ describe('formatAgo', () => {
   })
 })
 
-// Server errors are routed by `code`, not by wording: see errors.test.ts.
-describe('agent error copy', () => {
-  test('the auth hint names the fix in both languages', () => {
-    for (const l of LOCALES) {
-      const parts = translateRich(l, 'agent.authHint', { cmd: 'CMD' })
-      assert.ok(parts.some((p) => typeof p === 'object'), `${l}: {cmd} slot`)
-      assert.match(translate(l, 'agent.authHint'), /ANTHROPIC_API_KEY/, l)
-    }
+// The built-in agent and its sign-in hint are gone; what replaced them is the connect hint.
+describe('agent connect copy', () => {
+  test('the phrase to tell the agent names the window in both languages', () => {
+    for (const l of LOCALES) assert.match(translate(l, 'agent.phrase'), /layout-debug/, l)
   })
 })
 

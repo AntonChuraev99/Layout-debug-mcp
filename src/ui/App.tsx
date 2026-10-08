@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { ChatMessage, EditRequest, ErrorCode, LayoutNode, NodeId, Override, Snapshot, TargetKind } from '../shared/protocol.ts'
 import { ActionPalette } from './ActionPalette.tsx'
+import { AgentPopoverBody } from './AgentConnect.tsx'
+import { serverOrigin } from './origins.ts'
 import { Blank, CopyBlock } from './Blank.tsx'
 import { ChatPopover, type LocalMessage } from './ChatPopover.tsx'
 import { frameCropRect, placeHeldPopover, placePopover, union, type Side } from './geometry.ts'
@@ -33,9 +35,7 @@ import {
   findNode,
   finishedBetween,
   isOpen,
-  progressSteps,
   requestStatus,
-  RETRY_LINE_PREFIX,
   sameElement,
   threadFor,
   unownedMessages,
@@ -92,6 +92,14 @@ function writeStorage(key: string, value: string) {
     // Private window: the convenience holds for this session only.
   }
 }
+
+/**
+ * Where the target page loads the inspector from. Packaged, the server serves this window,
+ * so its port is read from the address bar; the build-time port only holds for dev.
+ */
+const SERVER_ORIGIN = serverOrigin(location, import.meta.env.DEV, __LD_SERVER_PORT__)
+/** How to bring the server back: the checkout runs it with Vite, the package with its CLI. */
+const START_COMMAND = import.meta.env.DEV ? 'npm run dev' : 'npx -y layout-debug-mcp window'
 
 /** macOS calls the key Option; the copy and the key cap follow. */
 const IS_MAC = (() => {
@@ -202,7 +210,7 @@ export function App() {
   const [focusRequest, setFocusRequest] = useState<{ row: 'first' | 'chat'; nonce: number } | null>(null)
   /** Text typed in the palette's field; it belongs to the selected element and is dropped with it. */
   const [paletteDraft, setPaletteDraft] = useState('')
-  const [popover, setPopover] = useState<'inbox' | 'status' | null>(null)
+  const [popover, setPopover] = useState<'inbox' | 'status' | 'agent' | null>(null)
 
   const [androidOverrides, setAndroidOverrides] = useState<Record<NodeId, Override>>({})
   const [dismissed, setDismissed] = useState<Set<string>>(readDismissed)
@@ -503,9 +511,7 @@ export function App() {
   /** Why a request's run failed, in this window's language (see resolveRequestErrors). */
   const requestErrors = useMemo(
     () =>
-      resolveRequestErrors(state.errors, state.statuses, locale, (code: ErrorCode | null) =>
-        code === 'agent_auth' ? t('agent.authTitle') : t('chat.failed'),
-      ),
+      resolveRequestErrors(state.errors, state.statuses, locale, (_code: ErrorCode | null) => t('chat.failed')),
     // `t` follows `locale`.
     [state.errors, state.statuses, locale],
   )
@@ -1130,7 +1136,7 @@ export function App() {
     <div className="pop__body">
       <h2 className="pop__title">{t('offline.title')}</h2>
       <p className="pop__text">{t('offline.text')}</p>
-      <CopyBlock text="npm run dev" />
+      <CopyBlock text={START_COMMAND} />
       <p className="pop__note">{t('offline.note', { seconds: RECONNECT_MS / 1000 })}</p>
     </div>
   )
@@ -1273,9 +1279,7 @@ export function App() {
   const inboxItems: InboxItem[] = state.requests.map((r) => ({
     request: r,
     status: statuses.get(r.id) ?? 'work',
-    steps: progressSteps(state.chat, r.id, state.projectDir),
     error: requestErrors.get(r.id)?.message || null,
-    errorCode: requestErrors.get(r.id)?.code ?? null,
     unread: unread.has(r.id),
   }))
   const loose: LooseEntry[] = [
@@ -1301,20 +1305,10 @@ export function App() {
     })
     chatMessages.splice(at === -1 ? chatMessages.length : at + 1, 0, line)
   }
-  const lastChatRequest = chatRequests[chatRequests.length - 1]
-  const chatAuthError = Boolean(
-    lastChatRequest && statuses.get(lastChatRequest.id) === 'error' && requestErrors.get(lastChatRequest.id)?.code === 'agent_auth',
-  )
   if (chatTargetNode) {
     for (const r of chatRequests) {
       const err = statuses.get(r.id) === 'error' ? requestErrors.get(r.id) : undefined
-      // The latest auth failure is the notice above the thread, with the fix; no second copy.
-      const inNotice = chatAuthError && r === lastChatRequest
-      if (err && !inNotice) {
-        insertLine({ id: `${ERROR_LINE_PREFIX}${r.id}`, role: 'system', text: err.code === 'agent_auth' ? t('agent.authTitle') : err.message }, [r.id])
-      }
-      const retry = statuses.get(r.id) === 'work' ? state.retrying.get(r.id) : undefined
-      if (retry) insertLine({ id: `${RETRY_LINE_PREFIX}${r.id}`, role: 'system', text: retry.message }, [r.id])
+      if (err) insertLine({ id: `${ERROR_LINE_PREFIX}${r.id}`, role: 'system', text: err.message }, [r.id])
     }
     for (const n of notes) {
       if (!sameElement({ id: n.nodeId, anchors: n.anchors }, chatTargetNode)) continue
@@ -1325,11 +1319,10 @@ export function App() {
   const lastMsg = chatThread[chatThread.length - 1]
   const chatWorking =
     chatRequests.some((r) => statuses.get(r.id) === 'work') && !(lastMsg?.role === 'assistant' && lastMsg.pending && lastMsg.text)
-  // The server starts one agent run per message, in parallel, on the same project: two
-  // runs editing one file lose an edit. So a new message waits until the running one ends —
-  // in any window: the server's status is shared, `busy` covers the gap before it arrives.
-  const agentBusy =
-    state.agentAvailable && (state.busy || [...state.statuses.values()].some((s) => s.status === 'working'))
+  // The server queues requests and hands them to the listening agent one at a time, so a
+  // new message never has to wait for the previous one here.
+  const chatQueued = new Set(chatIds.filter((id) => statuses.get(id) === 'queued'))
+  const openAgentHelp = () => setPopover('agent')
   const selectedOverride = selected ? overrides[selected.id] : undefined
   const attach = selectedOverride && snapshot ? describeOverride(selectedOverride, snapshot.pxPerUnit, '', t).trim() || null : null
 
@@ -1362,7 +1355,11 @@ export function App() {
         inbox={{ open: openCount, working: inboxItems.some((i) => i.status === 'work'), unread: unread.size > 0 }}
         inboxOpen={popover === 'inbox'}
         onInboxToggle={(open) => setPopover(open ? 'inbox' : null)}
-        inboxContent={<Inbox items={inboxItems} loose={loose} onOpen={openFromInbox} />}
+        inboxContent={<Inbox items={inboxItems} loose={loose} listening={state.listening} onOpen={openFromInbox} onConnect={openAgentHelp} />}
+        agent={state.online ? { listening: state.listening } : null}
+        agentOpen={popover === 'agent' && state.online}
+        onAgentToggle={(open) => setPopover(open ? 'agent' : null)}
+        agentContent={<AgentPopoverBody listening={state.listening} />}
         status={status}
         statusOpen={popover === 'status'}
         onStatusToggle={(open) => setPopover(open ? 'status' : null)}
@@ -1512,6 +1509,7 @@ export function App() {
             onForwardWheel={isAndroid ? undefined : web.forwardWheel}
             cursorLabel={t('cursor.select')}
             cursorCompact={learned}
+            agentListening={state.listening}
             apiRef={overlayApi}
           />
         )}
@@ -1533,13 +1531,13 @@ export function App() {
                 local={[]}
                 requestsById={requestsById}
                 projectDir={state.projectDir}
-                agentAvailable={state.agentAvailable}
+                listening={state.listening}
+                queuedIds={chatQueued}
                 online={state.online}
-                agentBusy={agentBusy}
                 working={chatWorking}
                 attach={null}
-                authError={chatAuthError}
                 onSend={() => {}}
+                onConnect={openAgentHelp}
                 onBack={closeChatToPalette}
                 onClose={() => setChat(null)}
               />
@@ -1569,13 +1567,13 @@ export function App() {
                   local={chatLocal}
                   requestsById={requestsById}
                   projectDir={state.projectDir}
-                  agentAvailable={state.agentAvailable}
+                  listening={state.listening}
+                  queuedIds={chatQueued}
                   online={state.online}
-                  agentBusy={agentBusy}
                   working={chatWorking}
                   attach={attach}
-                  authError={chatAuthError}
                   onSend={sendMessage}
+                  onConnect={openAgentHelp}
                   onBack={closeChatToPalette}
                   onClose={() => {
                     setChat(null)
@@ -1596,7 +1594,7 @@ export function App() {
                   detailsOpen={detailsOpen}
                   focusRequest={focusRequest}
                   draft={paletteDraft}
-                  sendBlocked={!state.online ? t('chat.offline') : agentBusy ? t('chat.agentBusy') : null}
+                  sendBlocked={!state.online ? t('chat.offline') : null}
                   offline={!state.online}
                   onDraftChange={setPaletteDraft}
                   onSend={sendFromPalette}
@@ -1626,7 +1624,7 @@ export function App() {
               </button>
             </div>
             <p className="banner__text">{t('banner.text')}</p>
-            <CopyBlock text={`<script src="http://127.0.0.1:${__LD_SERVER_PORT__}/inspector.js"></script>`} />
+            <CopyBlock text={`<script src="${SERVER_ORIGIN}/inspector.js"></script>`} />
           </div>
         )}
       </main>

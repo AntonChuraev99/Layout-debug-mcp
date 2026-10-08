@@ -43,6 +43,30 @@ export async function clearQueue(): Promise<void> {
   await api('/api/requests', { method: 'DELETE' })
 }
 
+export interface Health {
+  ok: boolean
+  name: string
+  version: string
+  pid: number
+  windows: number
+  listening: boolean
+  windowUrl: string
+}
+
+export const health = () => api<Health>('/api/health')
+
+/**
+ * An agent counts as listening for 10 s after its last wait_for_message ended
+ * (src/server/waiters.ts LISTEN_GRACE_MS). Tests that check the "no agent" copy start
+ * once the shared server says nobody listens; call after clearQueue(), which closes
+ * requests a previous test's agent left in work.
+ */
+export async function waitUntilNotListening(): Promise<void> {
+  await expect
+    .poll(async () => (await health()).listening, { timeout: 20_000, message: 'an agent still counts as listening' })
+    .toBe(false)
+}
+
 /**
  * The window mirrors the page snapshot to the server ~1 s after it changes. A snapshot
  * that is newer than `since` and contains the node proves the window sees that page.
@@ -138,6 +162,13 @@ export const hoverBox = (page: Page) => page.locator('.overlay .box--hover')
 /** Accessible name of the web frame (the window's `main`). */
 export const CANVAS_NAME = 'Frame. Hold Alt and click to select a layer'
 export const pipetteButton = (page: Page) => page.getByRole('button', { name: 'Pick a layer — or hold Alt' })
+/** The header indicator of listen mode (src/ui/i18n.ts agent.listening / agent.none). */
+export const agentListening = (page: Page) => page.getByRole('button', { name: 'Agent listening', exact: true })
+export const noAgentListening = (page: Page) => page.getByRole('button', { name: 'No agent listening', exact: true })
+/** Window copy for an edit sent with nobody listening (src/ui/i18n.ts). */
+export const NO_AGENT_CHAT = 'No agent is listening. Messages wait in the Inbox until one connects.'
+export const WAITING_LINE = 'Waiting for an agent. It gets this edit as soon as one listens.'
+export const NO_AGENT_INBOX = 'No agent is listening. Queued edits go out when one connects.'
 
 /**
  * Opens the window and waits until it shows `target` (default: the server's own
@@ -261,12 +292,20 @@ export function escapeRe(s: string): string {
 
 // --- MCP -----------------------------------------------------------------------
 
-/** The real MCP stdio server of the tool, pointed at the e2e server. */
-export async function startMcp(): Promise<Client> {
+/**
+ * The real MCP stdio server of the tool, pointed at the e2e server by port.
+ * LD_SERVER_URL stays unset on purpose: with it, open_window treats the server as
+ * external and never decides whether to start one, which is what the listen tests check.
+ * No browser is ever opened, and wait_for_message defaults to a short wait.
+ */
+export async function startMcp(extraEnv: Record<string, string> = {}): Promise<Client> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== 'LD_SERVER_URL') env[k] = v
   env.LD_SERVER_PORT = String(SERVER_PORT)
   env.LD_UI_PORT = String(UI_PORT)
+  env.LD_NO_BROWSER = '1'
+  env.LD_WAIT_SECONDS = '5'
+  Object.assign(env, extraEnv)
   // Same loader as `npx tsx`, without a shell in between (Windows-safe, killable).
   const transport = new StdioClientTransport({
     command: process.execPath,

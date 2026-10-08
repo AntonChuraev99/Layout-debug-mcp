@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.AntonChuraev99/layout-debug-mcp",
+  "title": "Layout Debug",
+  "description": "Select a layout layer on a live web or Android UI, move it, and hand the edit to any MCP agent.",
+  "repository": {
+    "url": "https://github.com/AntonChuraev99/Layout-debug-mcp",
+    "source": "github"
+  },
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "layout-debug-mcp",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
