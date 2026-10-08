@@ -1,6 +1,7 @@
 # layout-debug-mcp
 
 [![Release](https://img.shields.io/github/v/release/AntonChuraev99/Layout-debug-mcp?include_prereleases)](https://github.com/AntonChuraev99/Layout-debug-mcp/releases)
+[![npm](https://img.shields.io/npm/v/layout-debug-mcp?logo=npm)](https://www.npmjs.com/package/layout-debug-mcp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-22.12%2B%20%7C%2020.19%2B-brightgreen.svg)](https://nodejs.org)
 [![Status](https://img.shields.io/badge/status-pre--1.0-orange.svg)](#roadmap)
