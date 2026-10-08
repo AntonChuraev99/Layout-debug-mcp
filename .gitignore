@@ -22,3 +22,6 @@ layout-debug.config.json
 
 # Release assets (uploaded to GitHub Releases)
 release-media/
+
+# Local working notes (plans, task logs): never published
+.notes/

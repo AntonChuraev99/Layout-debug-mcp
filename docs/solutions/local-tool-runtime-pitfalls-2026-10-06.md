@@ -1,29 +1,27 @@
-# Ловушки локального рантайма: белое окно, молчаливый агент, сироты на Windows
+# Local runtime pitfalls: white window, silent agent, orphan processes on Windows
 
-**Статус:** Done
+Date: 2026-10-06.
 
-Дата: 2026-10-06. Ветка `worktree-ui-ux-polish`. Три дефекта нашлись на живом тесте и в e2e, у каждого неочевидный корень.
+## 1. The window sometimes opens blank
 
-## 1. Окно изредка открывается белым экраном
+**Symptom.** About 1 cold start in 41 (approx.): React does not mount, the page is white, no error.
 
-**Симптом.** Примерно в 1 из 41 холодного запуска React не монтируется, страница белая, ошибки нет.
+**Cause.** Vite without `server.host` listens on the first address Node resolves for `localhost`; on Windows 11 that is `::1`. The browser sometimes opens one connection over IPv4, a module request gets `ERR_CONNECTION_REFUSED`, and the import chain of `main.tsx` breaks.
 
-**Корень.** Vite без `server.host` слушает первый адрес, который Node вернул для `localhost`, — на Windows 11 это `::1`. Браузер иногда открывает одно соединение по IPv4 (`127.0.0.1`), модуль получает `ERR_CONNECTION_REFUSED`, цепочка импортов `main.tsx` рвётся. Перепроверено и отброшено: пересборка зависимостей Vite и сообщения `ws proxy error: ECONNABORTED` (они есть и в зелёных прогонах).
+**Fix.** `server.host: '127.0.0.1'` in `vite.config.ts`; e2e uses `http://127.0.0.1:<port>`. A boot watchdog in `index.html` shows the cause instead of a blank page.
 
-**Решение.** `server.host: '127.0.0.1'` в `vite.config.ts`, e2e ходит на литерал `http://127.0.0.1:<port>`. Плюс boot-watchdog в `index.html`: если приложение не смонтировалось, видно сообщение с причиной, а не белый экран.
+## 2. The built-in agent hangs silently
 
-## 2. Встроенный агент молча висит минутами
+**Symptom.** After an edit is sent, the element shows "Agent editing" for minutes; no error, no reply.
 
-**Симптом.** После отправки правки элемент часами показывает «Агент правит», в окне ни ошибки, ни ответа.
+**Cause.** Without valid auth the Claude Agent SDK gets `401 authentication_failed` and retries 10 times as `system/api_retry` events, which `extract()` in `src/server/agent.ts` ignored. Also, the `result` string was read before `is_error`, so an error text reached the chat as a normal reply.
 
-**Корень.** Claude Agent SDK без валидной авторизации получает `401 authentication_failed` и повторяет запрос 10 раз событиями `system/api_retry`; `extract()` в `src/server/agent.ts` эти события игнорировал. Вторая ошибка там же: строка `result` читалась раньше флага `is_error`, и текст ошибки уходил в чат как обычный ответ.
+**Fix.** A 401 stops the request at once with an auth error and a sign-in hint; `is_error` is checked first; the request ends as `error`, not `done`. Covered by `src/server/agent.test.ts`.
 
-**Решение.** На 401 — сразу событие `agent_auth` с подсказкой (ключ API или путь через MCP в сессии Claude Code) и остановка запроса; `is_error` проверяется первым; запрос заканчивается статусом `error`, а не `done`. Покрыто `src/server/agent.test.ts`.
+## 3. Ports stay taken after `npm run dev` is stopped
 
-## 3. После остановки `npm run dev` остаются процессы, держащие порты
+**Symptom.** On Windows, after a stop from the IDE or a kill of the npm pid, ports 5174/5175 stay taken and the next start fails.
 
-**Симптом.** На Windows после остановки из IDE или `Stop-Process` по pid npm порты 5174/5175 остаются заняты, следующий запуск падает.
+**Cause.** Children ran through `shell: true`; `child.kill()` killed `cmd`, not the tree. The runner's handlers do not run on a hard kill, and a kill of npm alone is not seen by the runner at all.
 
-**Корень.** Дети стартовали через `shell: true`, `child.kill()` убивал только `cmd`, а не дерево. Обработчики runner'а не срабатывают при жёстком kill, а убийство только npm runner вообще не замечает.
-
-**Решение.** `scripts/dev.mjs` запускает детей как `node <bin>` без shell и гасит дерево (`taskkill /T /F` на Windows, process group на POSIX). Отдельный `scripts/dev-watchdog.mjs` следит за pid runner'а и его родителя и гасит детей, если исчез любой. Доказано на Windows скриптом: kill runner'а и kill только npm — порты свободны. POSIX-ветка написана, вживую не прогонялась.
+**Fix.** `scripts/dev.mjs` starts children as `node <bin>` without a shell and kills whole trees (`taskkill /T /F` on Windows, process groups on POSIX). `scripts/dev-watchdog.mjs` watches the runner and its parent and stops the children when either disappears. Verified on Windows; the POSIX path is not verified yet (#25).
