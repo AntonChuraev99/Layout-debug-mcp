@@ -1,5 +1,6 @@
 # layout-debug-mcp
 
+[![Release](https://img.shields.io/github/v/release/AntonChuraev99/Layout-debug-mcp?include_prereleases)](https://github.com/AntonChuraev99/Layout-debug-mcp/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-22.12%2B%20%7C%2020.19%2B-brightgreen.svg)](https://nodejs.org)
 [![Status](https://img.shields.io/badge/status-pre--1.0-orange.svg)](#roadmap)
@@ -10,7 +11,7 @@
 
 [![layout-debug-mcp: выделяешь карточку, двигаешь, просишь агента, кадр обновляется с правкой](./.github/media/hero.gif)](./.github/media/hero.mp4)
 
-<sub>20-секундный цикл, снятый с настоящего инструмента. [MP4 в полном качестве](./.github/media/hero.mp4).</sub>
+<sub>18-секундный цикл, снятый с настоящего инструмента. [MP4 в полном качестве](./.github/media/hero.mp4).</sub>
 
 [English version](./README.md)
 
@@ -403,7 +404,7 @@ $env:LD_TARGET='android'; $env:LD_DEVICE='emulator-5554'; $env:LD_PROJECT_DIR='C
 
 ## Участие
 
-См. [CONTRIBUTING.md](./CONTRIBUTING.md) и [CHANGELOG.md](./CHANGELOG.md). Баги и идеи — в [issues](https://github.com/AntonChuraev99/Layout-debug-mcp/issues).
+См. [CONTRIBUTING.md](./CONTRIBUTING.md), [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) и [CHANGELOG.md](./CHANGELOG.md). Баги и идеи — в [issues](https://github.com/AntonChuraev99/Layout-debug-mcp/issues).
 
 ## Лицензия
 

@@ -14,5 +14,11 @@ layout-debug.config.json
 .env
 .env.*
 
+# Vite cache
+.vite/
+
 # Claude Code worktrees
 .claude/worktrees/
+
+# Release assets (uploaded to GitHub Releases)
+release-media/

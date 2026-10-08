@@ -1,7 +1,11 @@
 import {
+  altClick,
+  CANVAS_NAME,
   chatDialog,
   clearQueue,
   expect,
+  expectSameBox,
+  FIXTURES,
   frameOf,
   inboxCard,
   markOver,
@@ -13,6 +17,7 @@ import {
   selectInFrame,
   sendFromChat,
   sendFromPalette,
+  serveDir,
   serverRequests,
   test,
   waitForServerSnapshot,
@@ -102,6 +107,65 @@ test('10c the palette field draft belongs to its element', async ({ page }) => {
   await selectInFrame(page, frameOf(page).getByRole('heading', { name: 'Годовая подписка' }))
   await expect(palette(page)).toHaveAccessibleName(/Годовая подписка/)
   await expect(paletteField(page)).toHaveValue('')
+})
+
+test('10d the chat of a low element keeps its side while its thread grows (1280×720)', async ({ page }) => {
+  // Release recording: the chat opened above a low card, then jumped to the top-right corner
+  // as soon as a new line no longer fit above it.
+  const site = await serveDir(FIXTURES)
+  try {
+    await page.setViewportSize({ width: 1280, height: 720 })
+    await openWindow(page, { target: `${site.url}/cards.html`, probe: (n) => n.anchors.testId === 'weekly-summary' })
+    const card = frameOf(page).getByTestId('weekly-summary')
+    const cardBox = (await card.boundingBox())!
+    // The padding of the card, not its text: the pick takes the tightest box under the point.
+    await altClick(page, cardBox.x + 8, cardBox.y + 8)
+    await expect(palette(page)).toBeVisible()
+    const anchor = (await selectedBox(page).boundingBox())!
+    expectSameBox(anchor, cardBox)
+    const canvas = (await page.getByRole('main', { name: CANVAS_NAME }).boundingBox())!
+
+    const chatCard = page.locator('.float:not([aria-hidden]) .float__card--chat')
+    const shots = process.env.LD_E2E_SHOTS_DIR ?? test.info().outputPath('shots')
+    const seen: Array<{ side: string; box: { x: number; y: number; width: number; height: number } }> = []
+    const record = async (step: number) => {
+      // Placement runs in a layout effect after the card measured itself: wait until it holds still.
+      let last = ''
+      await expect
+        .poll(async () => {
+          const b = await chatCard.boundingBox()
+          const now = JSON.stringify(b)
+          const settled = now === last
+          last = now
+          return settled
+        }, { intervals: [100] })
+        .toBe(true)
+      const side = /side-(\w+)/.exec((await chatCard.getAttribute('class')) ?? '')?.[1] ?? '?'
+      seen.push({ side, box: (await chatCard.boundingBox())! })
+      await page.screenshot({ path: `${shots}/chat-grow-${step}.png` })
+    }
+
+    const stamp = Date.now()
+    await sendFromPalette(page, `e2e-10d first line ${stamp}`)
+    await record(1)
+    for (let i = 2; i <= 6; i++) {
+      await sendFromChat(page, `e2e-10d line ${i}: make the summary card more compact and move the totals to the right ${stamp}`)
+      await record(i)
+    }
+
+    const first = seen[0]!
+    expect(seen[seen.length - 1]!.box.height, 'the thread grew the chat').toBeGreaterThan(first.box.height + 40)
+    for (const [i, s] of seen.entries()) {
+      expect(s.side, `step ${i + 1}: the chat stays on the side it opened on`).toBe(first.side)
+      expect(s.box.y, `step ${i + 1}: inside the canvas (top)`).toBeGreaterThanOrEqual(canvas.y)
+      expect(s.box.y + s.box.height, `step ${i + 1}: inside the canvas (bottom)`).toBeLessThanOrEqual(canvas.y + canvas.height + 0.5)
+      const overlaps =
+        s.box.x < anchor.x + anchor.width && anchor.x < s.box.x + s.box.width && s.box.y < anchor.y + anchor.height && anchor.y < s.box.y + s.box.height
+      expect(overlaps, `step ${i + 1}: the chat does not cover the element it talks about`).toBe(false)
+    }
+  } finally {
+    await site.close()
+  }
 })
 
 test('18 two windows see the same queue', async ({ page, context }) => {

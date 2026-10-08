@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: a card low in the frame</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 32px; background: #f4f5f7; font: 15px/1.5 system-ui, sans-serif; color: #1b1e24; }
+      /* Same column as the demo: 520 px in the middle, so at a 1280 px window neither side of
+         a card has room for the 360 px chat, and it goes above or below. */
+      .page { max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+      .card { background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 1px 3px rgba(20, 22, 26, 0.1); }
+      .card h2 { margin: 0 0 6px; font-size: 17px; }
+      .card p { margin: 0; color: #6b7280; font-size: 13px; }
+      /* Tall enough to push the second card into the lower part of a 720 px window. */
+      .plan { height: 380px; }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="card plan" data-testid="annual-plan">
+        <h2>Annual plan</h2>
+        <p>Renews on 14 August.</p>
+      </section>
+      <section class="card" data-testid="weekly-summary">
+        <h2>Weekly summary</h2>
+        <p>Three sessions, 2 h 40 min in total.</p>
+      </section>
+    </main>
+    __INSPECTOR__
+  </body>
+</html>

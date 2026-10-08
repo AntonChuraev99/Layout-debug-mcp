@@ -88,9 +88,14 @@ export interface StaticSite {
   close: () => Promise<void>
 }
 
-/** Serves `dir` on a free loopback port, never cached, with the inspector tag filled in. */
-export async function serveDir(dir: string): Promise<StaticSite> {
+/**
+ * Serves `dir` on a free loopback port, never cached, with the inspector tag filled in.
+ * `delayMs` holds every response that long: a dev server that takes a moment to answer,
+ * so the gap between leaving a page and painting the next one is long enough to see.
+ */
+export async function serveDir(dir: string, opts: { delayMs?: number } = {}): Promise<StaticSite> {
   const server: Server = createServer(async (req, res) => {
+    if (opts.delayMs) await new Promise((ok) => setTimeout(ok, opts.delayMs))
     const path = new URL(req.url ?? '/', 'http://x').pathname
     const rel = normalize(decodeURIComponent(path === '/' ? '/index.html' : path)).replace(/^([/\\])+/, '')
     const file = join(dir, rel)

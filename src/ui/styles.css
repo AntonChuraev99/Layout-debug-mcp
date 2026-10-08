@@ -1029,6 +1029,11 @@ kbd {
   display: block;
   background: #fff;
 }
+/* The old page held over the new one during the window's own refresh (App.tsx frameStack):
+   a picture only, clicks go through to the page that is taking over. */
+.canvas iframe.frame--held {
+  pointer-events: none;
+}
 .device {
   position: absolute;
   display: block;
