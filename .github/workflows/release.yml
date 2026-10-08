@@ -52,7 +52,22 @@ jobs:
       - run: npm test
       - run: npm run build
 
+      # A re-run, or a version first published by hand, must still reach the MCP Registry.
+      - name: Check whether npm already has this version
+        id: npm-check
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          FOUND="$(npm view "layout-debug-mcp@$VERSION" version 2>/dev/null || true)"
+          if [ "$FOUND" = "$VERSION" ]; then
+            echo "npm already has $VERSION, skipping npm publish"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm does not have $VERSION yet, publishing"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.npm-check.outputs.exists != 'true'
         run: |
           # A pre-release (1.2.3-rc.1) must not become "latest".
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
@@ -61,17 +76,19 @@ jobs:
             npm publish
           fi
 
+      # npm processes new publishes in stages; the Registry checks the npm package, so wait.
+      # Returns at once when the version is already there.
       - name: Wait until the version is visible on npm
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if [ "$(npm view "layout-debug-mcp@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
               echo "layout-debug-mcp@$VERSION is on npm"
               exit 0
             fi
             sleep 10
           done
-          echo "::error::layout-debug-mcp@$VERSION did not appear on npm within 5 minutes"
+          echo "::error::layout-debug-mcp@$VERSION did not appear on npm within 10 minutes"
           exit 1
 
       - name: Install mcp-publisher
