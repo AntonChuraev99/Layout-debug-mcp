@@ -20,16 +20,10 @@ export interface ServerError {
   /** Absent only from a server older than error codes. */
   code?: ErrorCode
   message: string
-  /** Set when the error belongs to one request's agent run. */
+  /** Set when the error belongs to one request (the agent closed it as failed). */
   requestId?: string
   /** The locale this window had reported when it arrived: the server wrote `message` in it. */
   locale: Locale
-  at: number
-}
-
-/** The agent's API call for a request is being retried; the server's own wording. */
-export interface RetryNote {
-  message: string
   at: number
 }
 
@@ -45,7 +39,11 @@ export interface ServerState {
    */
   requestsSeed: number
   target: TargetKind
-  agentAvailable: boolean
+  /**
+   * An agent is waiting for messages over MCP (or is on one it got). The server decides;
+   * `ready` seeds it and `agentStatus` follows every change.
+   */
+  listening: boolean
   projectDir: string | null
   targetUrl: string | null
   device: string | null
@@ -55,9 +53,6 @@ export interface ServerState {
   requests: EditRequest[]
   /** Status the server reported per request; empty with a server that does not report it. */
   statuses: StatusMap
-  /** Requests whose agent is retrying an API call right now. Cleared by the next reply or a final status. */
-  retrying: ReadonlyMap<string, RetryNote>
-  busy: boolean
   /** Last error that is not a device capture failure; null once dismissed or a new submit goes out. */
   error: string | null
   /** Bumps on every server error, so a repeat of the same message is still seen. */
@@ -75,12 +70,6 @@ export interface ServerState {
 
 const ERROR_HISTORY = 20
 
-function without<V>(map: ReadonlyMap<string, V>, key: string): ReadonlyMap<string, V> {
-  const next = new Map(map)
-  next.delete(key)
-  return next
-}
-
 /** `locale` goes to the server on every (re)connect and on every change: its own texts follow it. */
 export function useServer(locale: Locale) {
   const localeRef = useRef(locale)
@@ -90,7 +79,7 @@ export function useServer(locale: Locale) {
     openedAt: 0,
     requestsSeed: 0,
     target: 'web',
-    agentAvailable: false,
+    listening: false,
     projectDir: null,
     targetUrl: null,
     device: null,
@@ -98,8 +87,6 @@ export function useServer(locale: Locale) {
     chat: [],
     requests: [],
     statuses: new Map(),
-    retrying: new Map(),
-    busy: false,
     error: null,
     errorSeq: 0,
     errors: [],
@@ -133,7 +120,8 @@ export function useServer(locale: Locale) {
         // A socket replaced by a newer one (StrictMode remount, reconnect) must not
         // mark the live connection as down when its late close event arrives.
         if (wsRef.current !== ws) return
-        setState((s) => ({ ...s, online: false, busy: false }))
+        // Nobody is known to listen while the server is out of reach; the next `ready` says.
+        setState((s) => ({ ...s, online: false, listening: false }))
         if (!closed) retry = window.setTimeout(connect, RECONNECT_MS)
       }
       ws.onmessage = (event) => {
@@ -154,7 +142,7 @@ export function useServer(locale: Locale) {
               return {
                 ...s,
                 target: msg.target,
-                agentAvailable: msg.agentAvailable,
+                listening: msg.listening === true,
                 projectDir: msg.projectDir,
                 targetUrl: msg.targetUrl,
                 device: msg.device,
@@ -173,16 +161,13 @@ export function useServer(locale: Locale) {
                 captureError: null,
                 captureCode: null,
               }
+            case 'agentStatus':
+              return s.listening === msg.listening ? s : { ...s, listening: msg.listening }
             case 'chat': {
               const idx = s.chat.findIndex((m) => m.id === msg.message.id)
               const chat = idx === -1 ? [...s.chat, msg.message] : s.chat.map((m, i) => (i === idx ? msg.message : m))
-              // The agent is talking again: the retry it reported went through.
-              const rid = msg.message.requestId
-              const answered = rid && msg.message.role === 'assistant' && msg.message.text && s.retrying.has(rid)
-              return { ...s, chat, retrying: answered ? without(s.retrying, rid) : s.retrying }
+              return { ...s, chat }
             }
-            case 'chatDone':
-              return { ...s, busy: false }
             case 'requests':
               return {
                 ...s,
@@ -190,14 +175,8 @@ export function useServer(locale: Locale) {
                 statuses: seedStatuses(s.statuses, msg.requests),
                 requestsSeed: seed ? s.requestsSeed + 1 : s.requestsSeed,
               }
-            case 'requestStatus': {
-              const final = msg.status === 'done' || msg.status === 'error'
-              return {
-                ...s,
-                statuses: applyStatusEvent(s.statuses, msg),
-                retrying: final && s.retrying.has(msg.id) ? without(s.retrying, msg.id) : s.retrying,
-              }
-            }
+            case 'requestStatus':
+              return { ...s, statuses: applyStatusEvent(s.statuses, msg) }
             case 'error': {
               // Branch on the code only; the text is localized.
               const route = errorRoute(msg.code, msg.requestId)
@@ -209,16 +188,6 @@ export function useServer(locale: Locale) {
                   captureErrorSeq: s.captureErrorSeq + 1,
                 }
               }
-              if (route === 'retrying') {
-                if (!msg.requestId) {
-                  console.warn('[layout-debug] agent_retrying without a requestId:', msg.message)
-                  return s
-                }
-                // Not a failure: the request stays in work and `busy` stays on.
-                const retrying = new Map(s.retrying)
-                retrying.set(msg.requestId, { message: msg.message, at: Date.now() })
-                return { ...s, retrying }
-              }
               const seq = s.errorSeq + 1
               return {
                 ...s,
@@ -228,8 +197,6 @@ export function useServer(locale: Locale) {
                   ...s.errors,
                   { seq, code: msg.code, message: msg.message, requestId: msg.requestId, locale: localeRef.current, at: Date.now() },
                 ].slice(-ERROR_HISTORY),
-                retrying: msg.requestId && s.retrying.has(msg.requestId) ? without(s.retrying, msg.requestId) : s.retrying,
-                busy: false,
               }
             }
             default:
@@ -265,7 +232,7 @@ export function useServer(locale: Locale) {
   const submit = useCallback(
     (comment: string): boolean => {
       const sent = send({ t: 'submit', comment })
-      if (sent) setState((s) => ({ ...s, busy: true, error: null }))
+      if (sent) setState((s) => ({ ...s, error: null }))
       return sent
     },
     [send],

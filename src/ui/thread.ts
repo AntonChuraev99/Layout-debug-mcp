@@ -128,8 +128,8 @@ export function analyzeChat(chat: ChatMessage[], requests: EditRequest[]): ChatA
 }
 
 /**
- * - `queued`   — waiting in the MCP queue, nobody has taken it;
- * - `work`     — the built-in agent is on it, or a Claude Code session took it from the queue;
+ * - `queued`   — waiting in the queue, no agent has taken it;
+ * - `work`     — an agent took it (wait_for_message or pending_requests) and has not replied;
  * - `done`     — the agent answered;
  * - `error`    — the agent's run failed (the server says why);
  * - `dismissed`— the user stopped waiting ("Не ждать агента");
@@ -241,19 +241,10 @@ export function finishedBetween(
   return out
 }
 
-/** Lines the window adds to a thread itself: a failed run, an API retry in progress. */
+/** A line the window adds to a thread itself: the agent closed the request as failed. */
 export const ERROR_LINE_PREFIX = 'ui-error:'
-export const RETRY_LINE_PREFIX = 'ui-retry:'
 
-/** The built-in agent's tool lines for a request (`Edit src/A.tsx`), oldest first. */
-export function progressSteps(chat: ChatMessage[], requestId: string, projectDir: string | null): string[] {
-  const prefix = `${requestId}-reply-`
-  return chat
-    .filter((m) => m.role === 'system' && m.id.startsWith(prefix))
-    .map((m) => shortenPath(m.text.replace(/^→\s*/, ''), projectDir))
-}
-
-/** Tool lines carry absolute paths; inside the project the relative one is what people read. */
+/** The first absolute path inside the project, made relative to it: that is what people read. */
 export function shortenPath(line: string, projectDir: string | null): string {
   if (!projectDir) return line
   const norm = (s: string) => s.replace(/\\/g, '/')
@@ -261,6 +252,22 @@ export function shortenPath(line: string, projectDir: string | null): string {
   const text = norm(line)
   const at = text.toLowerCase().indexOf(root.toLowerCase())
   return at === -1 ? line : text.slice(0, at) + text.slice(at + root.length)
+}
+
+/**
+ * Every project path in an agent's reply, made relative (`C:\proj\src\A.tsx` → `src/A.tsx`).
+ * Text without one comes back unchanged, separators included.
+ */
+export function shortenPaths(text: string, projectDir: string | null): string {
+  if (!projectDir) return text
+  let out = text
+  // Each pass removes one root, so the loop ends; the cap only guards a pathological reply.
+  for (let i = 0; i < 64; i++) {
+    const next = shortenPath(out, projectDir)
+    if (next === out) break
+    out = next
+  }
+  return out
 }
 
 /** Messages no request claims: MCP notes before any request, stray agent output. */

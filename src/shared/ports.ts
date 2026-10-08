@@ -43,7 +43,13 @@ export const UI_PORT = ports.ui
 export const SERVER_PORT = ports.server
 
 /**
- * The only browser pages allowed to drive the server, and the only parent the
- * inspector talks to.
+ * Every origin the layout-debug window can be served from: the Vite dev server
+ * (`npm run dev`) and the server itself, which serves the built window from its own
+ * port in the package (`npx layout-debug-mcp`). The only browser pages allowed to
+ * drive the server, and the only parents the inspector talks to.
  */
-export const UI_ORIGINS: readonly string[] = uiOriginsFor(UI_PORT)
+export function windowOriginsFor(uiPort: number, serverPort: number): readonly string[] {
+  return [...uiOriginsFor(uiPort), ...uiOriginsFor(serverPort)]
+}
+
+export const WINDOW_ORIGINS: readonly string[] = windowOriginsFor(UI_PORT, SERVER_PORT)

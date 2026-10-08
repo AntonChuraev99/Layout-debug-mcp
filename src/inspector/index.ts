@@ -23,6 +23,7 @@ import {
 } from '../shared/protocol.ts'
 import { ghostInset, type Area } from './ghost.ts'
 import { altHeld, forwardedKey, keyTarget, type InspectorKeyMessage } from './keys.ts'
+import { captureDelay } from './schedule.ts'
 
 /**
  * Free identifier, left as is by the bundler: the server swaps it for the JSON
@@ -48,6 +49,7 @@ let elementsById = new Map<NodeId, HTMLElement>()
  * Writing an override mutates the style attribute, which the observer would
  * report, which would trigger a capture, which reapplies overrides — a 4 Hz
  * loop. disconnect() also drops queued records, so this breaks the cycle.
+ * A page that mutates nonstop still gets a snapshot once a second (see schedule.ts).
  */
 const mo = new MutationObserver(() => scheduleCapture(250))
 function observe() {
@@ -517,9 +519,14 @@ function reapplyOverrides() {
 // --- wiring -----------------------------------------------------------------
 
 let captureTimer: number | undefined
+/** When the oldest capture ask still waiting was made; null when none waits. */
+let capturePendingSince: number | null = null
 function scheduleCapture(delay = 120) {
+  const now = Date.now()
+  if (capturePendingSince === null) capturePendingSince = now
   window.clearTimeout(captureTimer)
   captureTimer = window.setTimeout(() => {
+    capturePendingSince = null
     try {
       post({ tag: PROTOCOL_TAG, from: 'inspector', t: 'snapshot', snapshot: capture() })
     } catch (err) {
@@ -530,7 +537,7 @@ function scheduleCapture(delay = 120) {
         message: err instanceof Error ? err.message : String(err),
       })
     }
-  }, delay)
+  }, captureDelay(now, delay, capturePendingSince))
 }
 
 window.addEventListener('message', (event: MessageEvent) => {

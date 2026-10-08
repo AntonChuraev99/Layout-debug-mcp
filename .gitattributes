@@ -1,3 +1,7 @@
 * text=auto eol=lf
+# Scripts with a shebang must keep LF on every checkout (Linux/macOS run them directly).
+*.js text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
 *.png binary
 *.jpg binary

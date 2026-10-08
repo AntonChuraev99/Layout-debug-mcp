@@ -1,41 +1,70 @@
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { extname, join, normalize, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { extname, join } from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { SERVER_PORT, UI_ORIGINS, UI_PORT } from '../shared/ports.ts'
+import { SERVER_PORT, UI_PORT, WINDOW_ORIGINS } from '../shared/ports.ts'
 import { serverFailedLine, serverReadyLine } from '../shared/devMarkers.mjs'
+import { DEMO_DIR, INSPECTOR_BUNDLE, PACKAGE_NAME, PACKAGE_VERSION, UI_DIST_DIR } from '../shared/paths.ts'
+import { parseWaitTimeout, WAIT_MAX_SECONDS, WAIT_MIN_SECONDS } from '../shared/wait.ts'
 import {
   DEFAULT_LOCALE,
   type ChatMessage,
   type ConsumeRequestsBody,
   type ConsumeRequestsResponse,
-  type ErrorCode,
+  type HealthResponse,
   type Locale,
+  type Override,
   type PostChatBody,
   type PostChatResponse,
-  type RequestStatus,
   type ServerToUi,
   type UiToServer,
+  type WaitResponse,
 } from '../shared/protocol.ts'
-import { runAgent } from './agent.ts'
 import { AndroidAdapter, classifyCaptureError } from './android.ts'
-import { loadConfig } from './config.ts'
+import { loadConfig, type Config } from './config.ts'
 import { errorText, resolveLocale, t } from './i18n.ts'
-import { checkApiRequest, checkStaticRequest, checkWsUpgrade } from './security.ts'
+import {
+  checkApiRequest,
+  checkShutdownRequest,
+  checkStaticRequest,
+  checkWsUpgrade,
+  resolveStaticPath,
+} from './security.ts'
 import { Session } from './session.ts'
 import { parseUiMessage } from './uiMessage.ts'
+import { WaitHub } from './waiters.ts'
 
 const LISTEN_HOST = '127.0.0.1'
-const ROOT = resolve(fileURLToPath(import.meta.url), '../../..')
-const INSPECTOR_BUNDLE = join(ROOT, 'dist/inspector/inspector.js')
-const DEMO_DIR = join(ROOT, 'demo')
+const SERVER_ORIGIN = `http://${LISTEN_HOST}:${SERVER_PORT}`
 /** Free identifier in the inspector bundle, replaced on every serve (src/inspector/index.ts). */
 const UI_ORIGINS_PLACEHOLDER = '__LD_UI_ORIGINS__'
+const UI_INDEX = join(UI_DIST_DIR, 'index.html')
+/** A chat post or a consume body is a few KB at most; anything larger is a bug or an abuse. */
+const MAX_BODY_BYTES = 256_000
 
-const config = loadConfig(ROOT)
+let config: Config
+try {
+  config = loadConfig()
+} catch (err) {
+  // scripts/dev.mjs and open_window both read this line (shared/devMarkers.mjs, the log file).
+  console.error(serverFailedLine((err as Error).message.replace(/^\[layout-debug\] /, '')))
+  process.exit(1)
+}
+
+/**
+ * `npm run dev` serves the window from Vite on LD_UI_PORT (scripts/dev.mjs sets
+ * LD_DEV=1); everywhere else, the package included, this server serves the built
+ * window from its own port.
+ */
+const DEV_WINDOW = process.env.LD_DEV?.trim() === '1'
+const WINDOW_URL = DEV_WINDOW ? `http://${LISTEN_HOST}:${UI_PORT}/` : `${SERVER_ORIGIN}/`
+
 const session = new Session()
 const clients = new Set<WebSocket>()
+const startedAt = Date.now()
+/** Last moment a window socket was connected (now, while one is). */
+let lastWindowAt = startedAt
+
 /**
  * Language of window-facing text. Each window reports its own on connect and on
  * every switch; replies to one window use that window's, broadcasts use the last
@@ -49,41 +78,64 @@ const android = config.target === 'android' ? new AndroidAdapter(config.androidP
 /** Bumped on every device capture so the UI's <img> refetches instead of showing a stale frame. */
 let androidFrame = 0
 
+const hub = new WaitHub({
+  pending: () => session.undelivered(),
+  // The agent is busy with what wait_for_message gave it: still listening until it replies.
+  stillWorking: (id) => session.requests.find((r) => r.id === id)?.status === 'working',
+  delivered: (id) => {
+    for (const consumed of session.markConsumed([id])) announceStatus(consumed)
+    broadcast({ t: 'requests', requests: session.requests })
+  },
+  listeningChanged: (listening) => {
+    console.log(`[layout-debug] agent ${listening ? 'is listening' : 'stopped listening'}`)
+    broadcast({ t: 'agentStatus', listening })
+  },
+})
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
 }
 
 // --- http -------------------------------------------------------------------
 
 const http = createServer((req, res) => {
-  const url = new URL(req.url ?? '/', `http://${LISTEN_HOST}:${SERVER_PORT}`)
+  const url = new URL(req.url ?? '/', SERVER_ORIGIN)
 
-  // The API sends no CORS headers: the window reaches /api through the Vite proxy
-  // (same origin) and the MCP process is not a browser, so a page on any other
-  // origin gets neither a readable /api response nor a side effect. The one CORS
-  // exception is the public inspector.js (see serveInspector).
+  // The API sends no CORS headers: the window is same-origin with it (served from
+  // this port, or through the Vite proxy in dev) and the MCP process is not a
+  // browser, so a page on any other origin gets neither a readable /api response nor
+  // a side effect. The one CORS exception is the public inspector.js (see serveInspector).
   const isApi = url.pathname.startsWith('/api/')
   const verdict = isApi ? checkApiRequest(req.headers) : checkStaticRequest(req.headers)
   if (!verdict.ok) return reject(req, res, verdict.reason, isApi)
 
   if (url.pathname === '/inspector.js') return serveInspector(res)
-  if (url.pathname.startsWith('/demo')) return serveDemo(url.pathname, res)
+  if (url.pathname === '/demo' || url.pathname.startsWith('/demo/')) return serveDemo(url.pathname, res)
   if (url.pathname === '/api/android/screenshot') return void serveAndroidScreenshot(res)
-  if (isApi) return serveApi(url.pathname, req, res)
-
-  res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-  res.end('layout-debug server. The UI lives at http://localhost:' + UI_PORT)
+  if (isApi) return serveApi(url, req, res)
+  return serveWindow(url.pathname, req, res)
 })
 
 function reject(req: IncomingMessage, res: ServerResponse, reason: string, asJson: boolean) {
   console.warn(`[layout-debug] rejected ${req.method} ${req.url}: ${reason}`)
   res.writeHead(403, { 'content-type': asJson ? MIME['.json']! : 'text/plain; charset=utf-8' })
   res.end(asJson ? JSON.stringify({ error: reason }) : reason)
+}
+
+function sendJson(res: ServerResponse, body: unknown, status = 200) {
+  res.writeHead(status, { 'content-type': MIME['.json']!, 'cache-control': 'no-store' })
+  res.end(JSON.stringify(body))
 }
 
 function serveInspector(res: ServerResponse) {
@@ -109,31 +161,77 @@ function serveInspector(res: ServerResponse) {
     // `crossorigin` or as a module, which a plain <script src> does not need.
     'access-control-allow-origin': '*',
   })
-  // The inspector trusts only these parents; they follow LD_UI_PORT of *this* server.
-  res.end(bundle.replaceAll(UI_ORIGINS_PLACEHOLDER, JSON.stringify(UI_ORIGINS)))
+  // The inspector trusts only these parents; they follow the ports of *this* server.
+  res.end(bundle.replaceAll(UI_ORIGINS_PLACEHOLDER, JSON.stringify(WINDOW_ORIGINS)))
+}
+
+/** A regular file under `root` that `rel` names, or null (see resolveStaticPath). */
+function staticFile(root: string, rel: string): string | null {
+  const file = resolveStaticPath(root, rel)
+  if (!file) return null
+  try {
+    return statSync(file).isFile() ? file : null
+  } catch {
+    return null
+  }
 }
 
 function serveDemo(pathname: string, res: ServerResponse) {
   const rel = pathname.replace(/^\/demo\/?/, '') || 'index.html'
-  const file = join(DEMO_DIR, normalize(rel).replace(/^(\.\.[/\\])+/, ''))
-  if (!file.startsWith(DEMO_DIR) || !existsSync(file) || statSync(file).isDirectory()) {
-    const index = join(DEMO_DIR, 'index.html')
-    if (!existsSync(index)) {
-      res.writeHead(404).end('demo not found')
-      return
-    }
-    res.writeHead(200, { 'content-type': MIME['.html']! })
-    createReadStream(index).pipe(res)
+  const file = staticFile(DEMO_DIR, rel) ?? staticFile(DEMO_DIR, 'index.html')
+  if (!file) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('demo not found')
     return
   }
-  res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' })
+  res.writeHead(200, {
+    'content-type': MIME[extname(file)] ?? 'application/octet-stream',
+    'x-content-type-options': 'nosniff',
+  })
+  createReadStream(file).pipe(res)
+}
+
+/**
+ * The built window (dist/ui): files as they are, and index.html for any other path
+ * without an extension, so a reload on a client route still opens the window.
+ */
+function serveWindow(pathname: string, req: IncomingMessage, res: ServerResponse) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'GET, HEAD' })
+    res.end(`use GET for ${pathname}, not ${req.method}`)
+    return
+  }
+  if (!existsSync(UI_INDEX)) {
+    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end(
+      DEV_WINDOW
+        ? `layout-debug server. In npm run dev the window lives at http://${LISTEN_HOST}:${UI_PORT}/`
+        : `The layout-debug window is not built (${UI_INDEX} is missing). Run npm run build in the layout-debug-mcp directory.`,
+    )
+    return
+  }
+  const rel = pathname.replace(/^\/+/, '')
+  let file = rel ? staticFile(UI_DIST_DIR, rel) : UI_INDEX
+  if (!file && !extname(pathname)) file = UI_INDEX
+  if (!file) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end(`not found: ${pathname}`)
+    return
+  }
+  const isIndex = file === UI_INDEX
+  res.writeHead(200, {
+    'content-type': MIME[extname(file)] ?? 'application/octet-stream',
+    'x-content-type-options': 'nosniff',
+    // Hashed asset names change on every build; the page itself must not be cached.
+    'cache-control': isIndex ? 'no-store' : 'public, max-age=31536000, immutable',
+    // The window drives the device and the queue: no other page may frame it (clickjacking).
+    ...(isIndex ? { 'content-security-policy': "frame-ancestors 'none'", 'x-frame-options': 'DENY' } : {}),
+  })
+  if (req.method === 'HEAD') return void res.end()
   createReadStream(file).pipe(res)
 }
 
 async function serveAndroidScreenshot(res: ServerResponse) {
   if (!android) {
-    res.writeHead(409, { 'content-type': MIME['.json']! })
-    res.end(JSON.stringify({ error: 'the target is not android (set LD_TARGET=android)' }))
+    sendJson(res, { error: 'the target is not android (set LD_TARGET=android)' }, 409)
     return
   }
   try {
@@ -141,112 +239,196 @@ async function serveAndroidScreenshot(res: ServerResponse) {
     res.writeHead(200, { 'content-type': MIME['.png']!, 'cache-control': 'no-store' })
     res.end(png)
   } catch (err) {
-    res.writeHead(502, { 'content-type': MIME['.json']! })
-    res.end(JSON.stringify({ error: errorText(uiLocale, err) }))
+    sendJson(res, { error: errorText(uiLocale, err) }, 502)
+  }
+}
+
+class BodyTooLarge extends Error {
+  constructor() {
+    super(`request body is larger than ${MAX_BODY_BYTES} bytes`)
   }
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = ''
-    req.on('data', (chunk) => {
+    let bytes = 0
+    const onData = (chunk: Buffer) => {
+      bytes += chunk.length
+      if (bytes > MAX_BODY_BYTES) {
+        // Stop reading at once instead of buffering the rest of an oversized body.
+        req.off('data', onData)
+        req.pause()
+        reject(new BodyTooLarge())
+        return
+      }
       body += chunk
-      // A chat post is a few KB at most; anything larger is a bug or an abuse.
-      if (body.length > 256_000) reject(new Error('request body is too large'))
-    })
+    }
+    req.on('data', onData)
     req.on('end', () => resolve(body))
     req.on('error', reject)
   })
 }
 
+/** 400 for a bad body, 413 (and the connection dropped) for an oversized one. */
+function badBody(req: IncomingMessage, res: ServerResponse, err: unknown) {
+  if (err instanceof BodyTooLarge) {
+    console.warn(`[layout-debug] ${req.method} ${req.url}: ${err.message}, connection dropped`)
+    res.writeHead(413, { 'content-type': MIME['.json']!, connection: 'close' })
+    res.end(JSON.stringify({ error: err.message }), () => req.destroy())
+    return
+  }
+  sendJson(res, { error: (err as Error).message }, 400)
+}
+
+function requirePost(req: IncomingMessage, res: ServerResponse, path: string): boolean {
+  if (req.method === 'POST') return true
+  res.setHeader('allow', 'POST')
+  sendJson(res, { error: `use POST for ${path}, not ${req.method}` }, 405)
+  return false
+}
+
 /**
- * Lets a Claude Code session working over MCP write into the window's chat, so the
- * user sees what happened without switching back to the terminal.
+ * MCP `reply_in_window`: the agent writes into the window's chat, so the user sees
+ * what happened without switching to the agent's own interface.
  */
 async function postChat(req: IncomingMessage, res: ServerResponse) {
-  const json = (body: unknown, status = 200) => {
-    res.writeHead(status, { 'content-type': MIME['.json']! })
-    res.end(JSON.stringify(body))
-  }
-  if (req.method !== 'POST') return json({ error: `use POST for /api/chat, not ${req.method}` }, 405)
+  if (!requirePost(req, res, '/api/chat')) return
+  let parsed: Partial<PostChatBody>
   try {
-    const raw = await readBody(req)
-    const { text, role, requestId } = JSON.parse(raw || '{}') as Partial<PostChatBody>
-    if (typeof text !== 'string' || !text.trim()) return json({ error: 'text is empty' }, 400)
-    if (requestId != null && typeof requestId !== 'string') {
-      return json({ error: 'requestId must be a string (the id from pending_requests)' }, 400)
-    }
-
-    const { message, matched } = session.addReply(text.trim(), role === 'system' ? 'system' : 'assistant', requestId)
-    if (requestId && !matched) {
-      console.warn(`[layout-debug] reply_in_window named unknown request ${requestId}; delivered as a general message`)
-    }
-    broadcast({ t: 'chat', message })
-    if (matched) {
-      announceStatus(requestId!)
-      broadcast({ t: 'requests', requests: session.requests })
-    }
-    const body: PostChatResponse = { ok: true, delivered: clients.size }
-    if (matched) body.requestId = requestId
-    return json(body)
+    parsed = JSON.parse((await readBody(req)) || '{}') as Partial<PostChatBody>
   } catch (err) {
-    return json({ error: (err as Error).message }, 400)
+    return badBody(req, res, err)
   }
+  const { text, role, requestId, status } = parsed
+  if (typeof text !== 'string' || !text.trim()) return sendJson(res, { error: 'text is empty' }, 400)
+  if (requestId != null && typeof requestId !== 'string') {
+    return sendJson(res, { error: 'requestId must be a string (the id from wait_for_message or pending_requests)' }, 400)
+  }
+  if (status != null && status !== 'done' && status !== 'error') {
+    return sendJson(res, { error: 'status must be "done" or "error"' }, 400)
+  }
+
+  const { message, matched } = session.addReply(
+    text.trim(),
+    role === 'system' ? 'system' : 'assistant',
+    requestId,
+    status ?? 'done',
+  )
+  if (requestId && !matched) {
+    console.warn(`[layout-debug] reply_in_window named unknown request ${requestId}; delivered as a general message`)
+  }
+  broadcast({ t: 'chat', message })
+  if (matched) {
+    announceStatus(requestId!)
+    broadcast({ t: 'requests', requests: session.requests })
+    hub.refresh()
+  }
+  const body: PostChatResponse = { ok: true, delivered: clients.size }
+  if (matched) body.requestId = requestId
+  return sendJson(res, body)
+}
+
+/** MCP `pending_requests` marks what it read. `{ids}` marks only those; no `ids` marks every unconsumed one. */
+async function consumeRequests(req: IncomingMessage, res: ServerResponse) {
+  if (!requirePost(req, res, '/api/requests/consume')) return
+  let body: ConsumeRequestsBody
+  try {
+    body = JSON.parse((await readBody(req)) || '{}') as ConsumeRequestsBody
+  } catch (err) {
+    return badBody(req, res, err)
+  }
+  let ids: string[] | undefined
+  if (body.ids !== undefined) {
+    if (!Array.isArray(body.ids) || body.ids.some((id) => typeof id !== 'string')) {
+      return sendJson(res, { error: 'ids must be an array of request id strings' }, 400)
+    }
+    ids = body.ids
+  }
+  const consumed = session.markConsumed(ids)
+  for (const id of consumed) announceStatus(id)
+  if (consumed.length) broadcast({ t: 'requests', requests: session.requests })
+  const response: ConsumeRequestsResponse = { ok: true, consumed }
+  return sendJson(res, response)
 }
 
 /**
- * MCP `pending_requests` marks what it read. POST `{ids}` marks only those; GET (older
- * MCP builds) or a body without `ids` marks every unconsumed request.
+ * MCP `wait_for_message`: long-poll for the next request from the window. The
+ * request counts as delivered (consumed, `working`) only once the response is
+ * written; a client that hangs up first releases its wait and consumes nothing.
  */
-async function consumeRequests(req: IncomingMessage, res: ServerResponse) {
-  const json = (body: unknown, status = 200) => {
-    res.writeHead(status, { 'content-type': MIME['.json']! })
-    res.end(JSON.stringify(body))
+function waitForRequest(url: URL, req: IncomingMessage, res: ServerResponse) {
+  if (!requirePost(req, res, '/api/requests/wait')) return
+  const seconds = parseWaitTimeout(url.searchParams.get('timeout'))
+  if (seconds === null) {
+    return sendJson(
+      res,
+      { error: `timeout must be a whole number of seconds from ${WAIT_MIN_SECONDS} to ${WAIT_MAX_SECONDS}` },
+      400,
+    )
   }
-  try {
-    let ids: string[] | undefined
-    if (req.method === 'POST') {
-      const raw = await readBody(req)
-      const body = JSON.parse(raw || '{}') as ConsumeRequestsBody
-      if (body.ids !== undefined) {
-        if (!Array.isArray(body.ids) || body.ids.some((id) => typeof id !== 'string')) {
-          return json({ error: 'ids must be an array of request id strings' }, 400)
-        }
-        ids = body.ids
-      }
-    }
-    const consumed = session.markConsumed(ids)
-    for (const id of consumed) announceStatus(id)
-    if (consumed.length) broadcast({ t: 'requests', requests: session.requests })
-    const response: ConsumeRequestsResponse = { ok: true, consumed }
-    return json(response)
-  } catch (err) {
-    return json({ error: (err as Error).message }, 400)
+  // No body is expected; drain whatever came so the socket stays usable.
+  req.resume()
+
+  let open = true
+  let cancel: (() => void) | null = null
+  res.once('close', () => {
+    if (!open) return
+    open = false
+    cancel?.()
+  })
+  const gone = () => res.destroyed || Boolean(req.socket?.destroyed)
+  if (gone()) return
+
+  cancel = hub.wait(
+    {
+      deliver(request, written) {
+        open = false
+        if (gone()) return written(false)
+        res.once('finish', () => written(true))
+        res.once('close', () => {
+          if (!res.writableFinished) written(false)
+        })
+        // As the agent will see it once this response is out: read, being worked on.
+        const body: WaitResponse = { request: { ...request, consumed: true, status: 'working' } }
+        sendJson(res, body)
+      },
+      timeout() {
+        open = false
+        const body: WaitResponse = { timeout: true }
+        if (!gone()) sendJson(res, body)
+      },
+    },
+    seconds * 1000,
+  )
+}
+
+function health(): HealthResponse {
+  return {
+    ok: true,
+    name: PACKAGE_NAME,
+    version: PACKAGE_VERSION,
+    pid: process.pid,
+    windows: clients.size,
+    listening: hub.listening,
+    windowUrl: WINDOW_URL,
+    target: config.target,
+    targetUrl: config.targetUrl,
+    projectDir: config.projectDir,
   }
 }
 
-function serveApi(pathname: string, req: IncomingMessage, res: ServerResponse) {
-  const json = (body: unknown, status = 200) => {
-    res.writeHead(status, { 'content-type': MIME['.json']! })
-    res.end(JSON.stringify(body))
-  }
-
-  switch (pathname) {
+function serveApi(url: URL, req: IncomingMessage, res: ServerResponse) {
+  switch (url.pathname) {
     case '/api/chat':
       return void postChat(req, res)
     case '/api/health':
-      return json({
-        ok: true,
-        target: config.target,
-        targetUrl: config.targetUrl,
-        projectDir: config.projectDir,
-        windows: clients.size,
-      })
+      return sendJson(res, health())
     case '/api/snapshot':
-      return json({ snapshot: session.snapshot })
+      return sendJson(res, { snapshot: session.snapshot })
     case '/api/selected': {
       const node = session.selectedNode()
-      return json({
+      return sendJson(res, {
         node,
         ancestors: node ? session.ancestorsOf(node.id) : [],
         overrides: session.overrides,
@@ -258,13 +440,24 @@ function serveApi(pathname: string, req: IncomingMessage, res: ServerResponse) {
       if (req.method === 'DELETE') {
         session.clearRequests()
         broadcast({ t: 'requests', requests: session.requests })
-        return json({ ok: true })
+        hub.refresh()
+        return sendJson(res, { ok: true })
       }
-      return json({ requests: session.requests })
+      return sendJson(res, { requests: session.requests })
     case '/api/requests/consume':
       return void consumeRequests(req, res)
+    case '/api/requests/wait':
+      return waitForRequest(url, req, res)
+    case '/api/shutdown': {
+      const verdict = checkShutdownRequest(req.headers)
+      if (!verdict.ok) return reject(req, res, verdict.reason, true)
+      if (!requirePost(req, res, '/api/shutdown')) return
+      console.log('[layout-debug] shutdown requested over /api/shutdown')
+      res.once('finish', () => shutdown(0))
+      return sendJson(res, { ok: true, pid: process.pid })
+    }
     default:
-      return json({ error: 'unknown endpoint' }, 404)
+      return sendJson(res, { error: 'unknown endpoint' }, 404)
   }
 }
 
@@ -273,7 +466,7 @@ function serveApi(pathname: string, req: IncomingMessage, res: ServerResponse) {
 const wss = new WebSocketServer({
   server: http,
   path: '/ws',
-  // WebSockets are exempt from CORS: without this any open tab could drive the agent.
+  // WebSockets are exempt from CORS: without this any open tab could drive the queue and the device.
   verifyClient: ({ req }, done) => {
     const verdict = checkWsUpgrade(req.headers)
     if (verdict.ok) return done(true)
@@ -304,19 +497,14 @@ function announceStatus(id: string) {
   broadcast(msg)
 }
 
-/** Session transition + `requestStatus` broadcast; a refused transition sends nothing. */
-function setRequestStatus(id: string, status: RequestStatus, code?: ErrorCode, message?: string): boolean {
-  if (!session.setStatus(id, status, code, message)) return false
-  announceStatus(id)
-  return true
-}
-
 wss.on('connection', (ws) => {
   clients.add(ws)
+  lastWindowAt = Date.now()
   ws.on('message', (raw) => onUiMessage(ws, raw))
   ws.on('close', () => {
     clients.delete(ws)
     clientLocales.delete(ws)
+    lastWindowAt = Date.now()
   })
   void greet(ws)
 })
@@ -331,7 +519,7 @@ async function greet(ws: WebSocket) {
     targetUrl: config.targetUrl,
     device: config.device,
     deviceModel,
-    agentAvailable: Boolean(config.projectDir),
+    listening: hub.listening,
   })
   send(ws, { t: 'requests', requests: session.requests })
   // Replay the thread so a reloaded window does not come back blank.
@@ -373,9 +561,10 @@ function onUiMessage(ws: WebSocket, raw: unknown) {
     case 'clearRequests':
       session.clearRequests()
       broadcast({ t: 'requests', requests: session.requests })
+      hub.refresh()
       break
     case 'submit':
-      void handleSubmit(ws, msg.comment)
+      handleSubmit(ws, msg.comment)
       break
     case 'androidCapture':
       void captureAndroid(ws)
@@ -417,21 +606,24 @@ async function captureAndroid(ws: WebSocket) {
   }
 }
 
-async function applyAndroidOverride(ws: WebSocket, override: import('../shared/protocol.ts').Override) {
+async function applyAndroidOverride(ws: WebSocket, override: Override) {
   if (!android) return
   try {
     await android.setOverride(override)
-    // The tweak only exists on the device; refetching the frame is the only way the
-    // desktop sees what actually happened.
-    androidFrame++
-    broadcast({ t: 'androidSnapshot', snapshot: session.snapshot!, frame: androidFrame })
   } catch (err) {
     send(ws, {
       t: 'error',
       code: 'live_edit',
       message: t(localeOf(ws), 'overrideError', { reason: errorText(localeOf(ws), err) }),
     })
+    return
   }
+  // The tweak only exists on the device; refetching the frame is the only way the
+  // desktop sees what actually happened. With no capture yet there is no tree to
+  // pair the frame with, so take a full one.
+  if (!session.snapshot) return captureAndroid(ws)
+  androidFrame++
+  broadcast({ t: 'androidSnapshot', snapshot: session.snapshot, frame: androidFrame })
 }
 
 async function clearAndroidOverrides(ws: WebSocket) {
@@ -448,12 +640,12 @@ async function clearAndroidOverrides(ws: WebSocket) {
   }
 }
 
-/** Same event to every window, with the text rendered in each window's own language. */
-function broadcastLocalized(build: (locale: Locale) => ServerToUi) {
-  for (const ws of clients) send(ws, build(localeOf(ws)))
-}
-
-async function handleSubmit(ws: WebSocket, comment: string) {
+/**
+ * The window sent an edit. It goes to the queue as `queued`; a listening agent gets
+ * it through wait_for_message (now, or on its next call), any agent through
+ * pending_requests. With no agent listening the window says so in the chat.
+ */
+function handleSubmit(ws: WebSocket, comment: string) {
   const request = session.buildRequest(comment)
   if (!request) {
     send(ws, { t: 'error', code: 'nothing_selected', message: t(localeOf(ws), 'nothingToSubmit') })
@@ -461,7 +653,6 @@ async function handleSubmit(ws: WebSocket, comment: string) {
     return
   }
   const requestId = request.id
-
   const post = (message: ChatMessage) => {
     session.addChat(message)
     broadcast({ t: 'chat', message })
@@ -471,112 +662,95 @@ async function handleSubmit(ws: WebSocket, comment: string) {
   // buildRequest starts every request `queued`; windows learn it from this frame and
   // from the explicit status event, the same way as every later transition.
   announceStatus(requestId)
-
-  if (!config.projectDir) {
-    broadcast({ t: 'requests', requests: session.requests })
-    post({
-      id: `${requestId}-queued`,
-      role: 'system',
-      text: t(uiLocale, 'queuedNoProject'),
-      requestId,
-    })
-    send(ws, { t: 'chatDone' })
-    return
-  }
-
-  setRequestStatus(requestId, 'working')
   broadcast({ t: 'requests', requests: session.requests })
-
-  const messageId = `${requestId}-reply`
-  let text = ''
-  const push = (pending: boolean) => {
-    post({ id: messageId, role: 'assistant', text, pending, requestId })
+  if (!hub.listening) {
+    post({ id: `${requestId}-queued`, role: 'system', text: t(uiLocale, 'queuedNoAgent'), requestId })
   }
-  let failure: { code: ErrorCode; reason: string } | null = null
-  const fail = (code: ErrorCode, reason: string) => {
-    if (failure) return
-    failure = { code, reason }
-    const render = (locale: Locale) =>
-      code === 'agent_auth'
-        ? t(locale, 'agentAuth', { reason: reason || 'authentication_failed' })
-        : reason || t(locale, 'agentFailed')
-    console.warn(`[layout-debug] agent failed on request ${requestId} (${code}): ${reason || 'no reason given'}`)
-    setRequestStatus(requestId, 'error', code, render(uiLocale))
-    broadcastLocalized((locale) => ({ t: 'error', code, message: render(locale), requestId }))
-  }
-
-  try {
-    for await (const event of runAgent(request, config.projectDir)) {
-      switch (event.kind) {
-        case 'text':
-          text += (text ? '\n\n' : '') + event.text
-          push(true)
-          break
-        case 'tool':
-          post({ id: `${messageId}-${event.text}`, role: 'system', text: `→ ${event.text}`, requestId })
-          break
-        case 'retry':
-          // Informational: the request stays `working`. runAgent yields this once per run.
-          console.warn(`[layout-debug] agent API retry on request ${requestId}: ${event.text} (attempt ${event.attempt})`)
-          broadcastLocalized((locale) => ({
-            t: 'error',
-            code: 'agent_retrying',
-            message: t(locale, 'agentRetrying', {
-              reason: event.text,
-              attempt: event.attempt,
-              max: event.maxRetries || '?',
-            }),
-            requestId,
-          }))
-          break
-        case 'error':
-          fail(event.code, event.text)
-          break
-        case 'done':
-          break
-      }
-    }
-  } catch (err) {
-    fail('agent_failed', err instanceof Error ? err.message : String(err))
-  }
-
-  if (failure) {
-    // Keep what the agent managed to say, but settled; an empty reply after an error
-    // would read as "the agent answered nothing". The request stays unconsumed so the
-    // MCP path (pending_requests) can still pick it up.
-    if (text) push(false)
-  } else {
-    session.markConsumed([requestId])
-    if (text) push(false)
-    setRequestStatus(requestId, 'done')
-  }
-  broadcast({ t: 'requests', requests: session.requests })
   send(ws, { t: 'chatDone' })
+  hub.dispatch()
 }
 
-http.on('error', (err: NodeJS.ErrnoException) => {
+// --- lifecycle --------------------------------------------------------------
+
+let shuttingDown = false
+function shutdown(code: number) {
+  if (shuttingDown) return
+  shuttingDown = true
+  hub.close()
+  for (const ws of clients) ws.terminate()
+  wss.close()
+  http.close()
+  http.closeAllConnections?.()
+  // Let the last log line and response flush.
+  setTimeout(() => process.exit(code), 50).unref()
+}
+
+/** Started by open_window: no window and no waiting agent for this long → exit. */
+if (config.idleExitMs > 0) {
+  const idleMs = config.idleExitMs
+  const timer = setInterval(() => {
+    if (clients.size || hub.openWaits) return
+    const lastActive = Math.max(startedAt, lastWindowAt, hub.lastActiveAt)
+    if (Date.now() - lastActive < idleMs) return
+    console.log(`[layout-debug] no window and no agent for ${Math.round(idleMs / 60_000)} min, exiting`)
+    shutdown(0)
+  }, Math.min(60_000, Math.max(1_000, Math.floor(idleMs / 4))))
+  timer.unref()
+}
+
+process.on('SIGINT', () => shutdown(0))
+process.on('SIGTERM', () => shutdown(0))
+
+/** What answers on our port, if it is a layout-debug server. */
+async function probeOwnServer(): Promise<HealthResponse | null> {
+  try {
+    const res = await fetch(`${SERVER_ORIGIN}/api/health`, { signal: AbortSignal.timeout(1500) })
+    const body = (await res.json()) as Partial<HealthResponse>
+    return body.name === PACKAGE_NAME ? (body as HealthResponse) : null
+  } catch {
+    return null
+  }
+}
+
+http.on('error', async (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    const other = await probeOwnServer()
+    if (other) {
+      // Another copy already serves this port: nothing to do, and not an error for
+      // open_window or `layout-debug-mcp window`. scripts/dev.mjs still reads it as a failure.
+      console.log(
+        serverFailedLine(
+          `port ${SERVER_PORT} is already served by ${PACKAGE_NAME} ${other.version} (pid ${other.pid}); ` +
+            `use that one: ${other.windowUrl}`,
+        ),
+      )
+      process.exit(0)
+    }
+  }
   const altPort = SERVER_PORT === 5185 ? 5195 : 5185
   const why =
     err.code === 'EADDRINUSE'
-      ? `port ${SERVER_PORT} is already in use: a layout-debug server is already running or another process holds the port. ` +
+      ? `port ${SERVER_PORT} is already in use by another program. ` +
         `Find it: ${
           process.platform === 'win32' ? `netstat -ano | findstr ${SERVER_PORT}` : `lsof -i :${SERVER_PORT}`
-        }. Or start on another port: ${
-          process.platform === 'win32'
-            ? `$env:LD_SERVER_PORT=${altPort}; npm run dev`
-            : `LD_SERVER_PORT=${altPort} npm run dev`
-        } (the window port is LD_UI_PORT)`
+        }. Or use another port: set LD_SERVER_PORT=${altPort} in the environment of the MCP server ` +
+        '(or of npm run dev; the window port in dev is LD_UI_PORT)'
       : err.code === 'EACCES'
-        ? `no permission to listen on port ${SERVER_PORT}`
+        ? `no permission to listen on port ${SERVER_PORT} (set LD_SERVER_PORT to another port)`
         : err.message
-  // scripts/dev.mjs watches for this line (shared/devMarkers.mjs).
+  // scripts/dev.mjs and open_window watch for this line (shared/devMarkers.mjs).
   console.error(serverFailedLine(why))
   process.exit(1)
 })
 
-// Loopback only: the API drives an agent with write access and exposes the phone's screen.
+// Loopback only: the API exposes the queue, the chat and the phone's screen.
 http.listen(SERVER_PORT, LISTEN_HOST, async () => {
   console.log(serverReadyLine(LISTEN_HOST, SERVER_PORT))
+  console.log(`[layout-debug] ${PACKAGE_NAME} ${PACKAGE_VERSION}, pid ${process.pid}`)
+  console.log(`[layout-debug] window: ${WINDOW_URL}`)
+  if (!DEV_WINDOW && !existsSync(UI_INDEX)) {
+    console.warn(`[layout-debug] the window is not built (${UI_INDEX} is missing); run npm run build`)
+  }
   if (android) {
     const devices = await AndroidAdapter.devices().catch(() => [])
     console.log(`[layout-debug] target: android, device agent port ${config.androidPort}`)
@@ -590,5 +764,9 @@ http.listen(SERVER_PORT, LISTEN_HOST, async () => {
   } else {
     console.log(`[layout-debug] target: ${config.targetUrl}`)
   }
-  console.log(`[layout-debug] project: ${config.projectDir ?? 'not set: the agent is off, edits pile up in the queue'}`)
+  console.log(`[layout-debug] project: ${config.projectDir}`)
+  console.log(`[layout-debug] config: ${config.configFile ?? 'none (defaults and LD_* variables)'}`)
+  if (config.idleExitMs > 0) {
+    console.log(`[layout-debug] exits after ${Math.round(config.idleExitMs / 60_000)} min with no window and no agent`)
+  }
 })

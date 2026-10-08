@@ -1,13 +1,17 @@
 /**
- * MCP entry point. Runs as its own stdio process (Claude Code spawns it), so it
- * cannot share memory with the layout-debug server — it reads the live session
- * over the server's local HTTP API instead.
+ * MCP entry point: a stdio MCP server that any MCP client can start (`npx -y
+ * layout-debug-mcp`). It runs as its own process, so it cannot share memory with
+ * the layout-debug server; it reads the live session over the server's local HTTP
+ * API and starts that server when `open_window` finds none.
+ *
+ * stdout carries MCP frames only: diagnostics go to stderr, child processes write
+ * to a log file or nowhere.
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
+import { PACKAGE_NAME, PACKAGE_VERSION } from '../shared/paths.ts'
 import { SERVER_PORT } from '../shared/ports.ts'
-import { resolveServerBase, unreachableMessage } from './connection.ts'
 import type {
   ApiErrorBody,
   ConsumeRequestsBody,
@@ -17,9 +21,17 @@ import type {
   PostChatBody,
   PostChatResponse,
   Snapshot,
+  WaitResponse,
 } from '../shared/protocol.ts'
+import { WAIT_MAX_SECONDS, WAIT_MIN_SECONDS } from '../shared/wait.ts'
+import { resolveServerBase, resolveWaitSeconds, unreachableMessage } from './connection.ts'
+import { compactTree, describeNode, describeRequest, WAIT_FOOTER, waitTimeoutText } from './format.ts'
+import { openWindow } from './launch.ts'
 
 const BASE = resolveServerBase(process.env, SERVER_PORT)
+const EXTERNAL_SERVER = Boolean(process.env.LD_SERVER_URL?.trim())
+const wait = resolveWaitSeconds(process.env)
+if (wait.warning) console.error(wait.warning)
 
 /** The server answered, but with an error status — it is running, the request was wrong. */
 class ApiError extends Error {
@@ -33,8 +45,24 @@ class ApiError extends Error {
   }
 }
 
+/** Nothing answered at BASE (connection refused, reset, DNS). */
+class UnreachableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UnreachableError'
+  }
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init)
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, init)
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') throw err
+    // fetch() says only "fetch failed"; the useful part (ECONNREFUSED, ENOTFOUND) is in `cause`.
+    const cause = err instanceof Error && err.cause instanceof Error ? ` (${err.cause.message})` : ''
+    throw new UnreachableError((err instanceof Error ? err.message : String(err)) + cause)
+  }
   if (!res.ok) {
     let reason = res.statusText || 'no reason given'
     try {
@@ -59,84 +87,93 @@ function fail(err: unknown) {
         (err.status === 403
           ? 'The server only accepts local, non-browser calls; check LD_SERVER_URL points at it.'
           : err.status === 404
-            ? 'The server is older than this MCP build; restart npm run dev in the layout-debug-mcp directory.'
+            ? 'The server is older than this MCP server; call open_window, which replaces an older server ' +
+              'when no window is connected to it.'
             : 'Fix the arguments and call the tool again.'),
     )
   }
-  // fetch() says only "fetch failed"; the useful part (ECONNREFUSED, ENOTFOUND) is in `cause`.
-  const cause = err instanceof Error && err.cause instanceof Error ? ` (${err.cause.message})` : ''
-  const message = (err instanceof Error ? err.message : String(err)) + cause
-  return text(unreachableMessage(BASE, message, process.env))
+  if (err instanceof UnreachableError) return text(unreachableMessage(BASE, err.message, process.env))
+  // Anything else is a fault in this process (bad data, a bug), not a dead server: say what it was.
+  const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  console.error(`[layout-debug] MCP tool failed: ${err instanceof Error ? err.stack : message}`)
+  return text(
+    `The layout-debug MCP server failed while preparing the result: ${message}. ` +
+      'The server itself answered; this is a bug in layout-debug-mcp. Try the call again; ' +
+      'if it repeats, report it at https://github.com/AntonChuraev99/Layout-debug-mcp/issues.',
+  )
 }
 
-/** Full trees run to thousands of nodes; MCP consumers want the shape, not every div. */
-function compactTree(snapshot: Snapshot, maxDepth: number): string {
-  const lines: string[] = []
-  // Sizes here must match `selected_element`, which reports in `unit`, not frame px.
-  const q = (px: number) => Math.round(px / (snapshot.pxPerUnit || 1))
-  const walk = (id: string, depth: number) => {
-    const node = snapshot.nodes[id]
-    if (!node || depth > maxDepth) return
-    const anchor = node.anchors.sourceLoc ?? node.anchors.testId ?? node.anchors.className?.split(/\s+/)[0]
-    lines.push(
-      `${'  '.repeat(depth)}${node.id} ${node.kind}${anchor ? ` [${anchor}]` : ''} ` +
-        `${q(node.bounds.w)}×${q(node.bounds.h)}${snapshot.unit === 'dp' ? 'dp' : ''}` +
-        (node.anchors.text ? ` "${node.anchors.text}"` : ''),
-    )
-    for (const child of node.childIds) walk(child, depth + 1)
-  }
-  walk(snapshot.rootId, 0)
-  return lines.join('\n')
-}
+const INSTRUCTIONS =
+  'Loop rule: after open_window, call wait_for_message; when it returns a message, do the work, call ' +
+  'reply_in_window(requestId, text, status), then call wait_for_message again. A timeout result is normal: call ' +
+  'it again at once. Stop only when the user says so. Start with open_window when the user wants to debug a ' +
+  'layout or asks to open layout-debug. The window shows a live UI; the user selects and moves elements there.'
 
-function describeNode(node: LayoutNode, ancestors: LayoutNode[], unit: string, pxPerUnit: number): string {
-  const a = node.anchors
-  const q = (px: number) => Math.round((px / (pxPerUnit || 1)) * 10) / 10
-  const lines = [
-    `Selected: ${node.label}`,
-    `Kind: ${node.kind}`,
-    `Box: ${q(node.bounds.w)}×${q(node.bounds.h)} ${unit} @ ${q(node.bounds.x)},${q(node.bounds.y)}`,
-  ]
-  if (a.sourceLoc) lines.push(`Source: ${a.sourceLoc}`)
-  if (a.testId) lines.push(`data-testid: ${a.testId}`)
-  if (a.domId) lines.push(`id: ${a.domId}`)
-  if (a.className) lines.push(`Classes: ${a.className}`)
-  if (a.text) lines.push(`Text: ${JSON.stringify(a.text)}`)
-  lines.push(`Path: ${a.path}`)
-  const styles = Object.entries(node.styles)
-  if (styles.length) lines.push(`Properties: ${styles.map(([k, v]) => `${k}=${v}`).join(', ')}`)
-  if (ancestors.length) {
-    lines.push(`Ancestors: ${ancestors.map((x) => x.kind).join(' > ')}`)
-  }
-  return lines.join('\n')
-}
+const server = new McpServer({ name: PACKAGE_NAME, version: PACKAGE_VERSION }, { instructions: INSTRUCTIONS })
 
-function describeRequest(req: EditRequest): string {
-  const lines = [
-    `requestId: ${req.id}`,
-    `[${req.consumed ? 'read' : 'NEW'}] ${new Date(req.createdAt).toISOString()}` +
-      (req.status ? ` · status: ${req.status}` : '') +
-      (req.status === 'error' && req.errorMessage ? ` (${req.errorMessage})` : ''),
-    `Comment: ${req.comment}`,
-    `Element: ${req.node.label} (${req.node.kind})`,
-  ]
-  if (req.node.anchors.sourceLoc) lines.push(`Source: ${req.node.anchors.sourceLoc}`)
-  if (req.node.anchors.className) lines.push(`Classes: ${req.node.anchors.className}`)
-  lines.push(`Path: ${req.node.anchors.path}`)
-  const q = (px: number) => Math.round((px / (req.pxPerUnit || 1)) * 10) / 10
-  for (const o of req.overrides) {
-    const parts: string[] = []
-    if (o.dx || o.dy) parts.push(`offset ${q(o.dx)}, ${q(o.dy)} ${req.unit}`)
-    if (o.width != null || o.height != null) {
-      parts.push(`size ${o.width != null ? q(o.width) : '—'}×${o.height != null ? q(o.height) : '—'} ${req.unit}`)
+server.registerTool(
+  'open_window',
+  {
+    title: 'Open the layout-debug window',
+    description:
+      'Start the layout-debug server if it is not running and open its window in the browser. The window shows the ' +
+      'live UI (a web page or an Android device); the user selects elements, moves them and writes requests there. ' +
+      'Returns the window URL and how to listen for the user\'s messages (wait_for_message).',
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      return text(await openWindow({ base: BASE, port: SERVER_PORT, env: process.env, external: EXTERNAL_SERVER }))
+    } catch (err) {
+      return fail(err)
     }
-    if (o.hidden) parts.push('hidden')
-    if (parts.length) lines.push(`Live edit (${o.nodeId}): ${parts.join(', ')}`)
-  }
-  return lines.join('\n')
-}
+  },
+)
 
-const server = new McpServer({ name: 'layout-debug', version: '0.1.0' })
+server.registerTool(
+  'wait_for_message',
+  {
+    title: 'Wait for the next message from the window',
+    description:
+      'Wait until the user sends a message or an edit from the layout-debug window, then return it: the comment, ' +
+      'the element (anchors for finding it in code) and the live-edit measurements. Returns before common tool ' +
+      'timeouts; a timeout result is normal, call it again. Call open_window first.',
+    inputSchema: {
+      timeoutSec: z
+        .number()
+        .int()
+        .min(WAIT_MIN_SECONDS)
+        .max(WAIT_MAX_SECONDS)
+        .optional()
+        .describe(`How long to wait, in seconds (default ${wait.seconds})`),
+    },
+  },
+  async ({ timeoutSec }, extra) => {
+    const seconds = timeoutSec ?? wait.seconds
+    try {
+      // The server answers within `seconds`; the margin only covers a server that hangs.
+      const signal = AbortSignal.any([extra.signal, AbortSignal.timeout((seconds + 15) * 1000)])
+      const body = await api<WaitResponse>(`/api/requests/wait?timeout=${seconds}`, { method: 'POST', signal })
+      if ('timeout' in body) return text(waitTimeoutText(seconds))
+      return text(`${describeRequest(body.request)}\n\n${WAIT_FOOTER(body.request.id)}`)
+    } catch (err) {
+      if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+        if (extra.signal.aborted) return text('Cancelled by the client; nothing was taken from the queue.')
+        return text(
+          `The layout-debug server at ${BASE} did not answer within ${seconds + 15} s. ` +
+            'Call open_window to check it, then wait_for_message again.',
+        )
+      }
+      if (err instanceof UnreachableError) {
+        return text(
+          `${unreachableMessage(BASE, err.message, process.env)}\n` +
+            'Call open_window to start the server and open the window, then wait_for_message again.',
+        )
+      }
+      return fail(err)
+    }
+  },
+)
 
 server.registerTool(
   'layout_snapshot',
@@ -149,12 +186,8 @@ server.registerTool(
   async ({ maxDepth }) => {
     try {
       const { snapshot } = await api<{ snapshot: Snapshot | null }>('/api/snapshot')
-      if (!snapshot) return text('No snapshot yet: open the page in the layout-debug window.')
-      return text(
-        `Target: ${snapshot.target}, unit: ${snapshot.unit}, ` +
-          `viewport ${snapshot.viewport.w}×${snapshot.viewport.h}, nodes: ${Object.keys(snapshot.nodes).length}\n\n` +
-          compactTree(snapshot, maxDepth),
-      )
+      if (!snapshot) return text('No snapshot yet: open the page in the layout-debug window (open_window).')
+      return text(compactTree(snapshot, maxDepth))
     } catch (err) {
       return fail(err)
     }
@@ -179,18 +212,7 @@ server.registerTool(
         pxPerUnit: number | null
       }>('/api/selected')
       if (!data.node) return text('Nothing is selected. Ask the user to select an element in the layout-debug window.')
-      const scale = data.pxPerUnit || 1
-      const q = (px: number) => Math.round((px / scale) * 10) / 10
-      const body = describeNode(data.node, data.ancestors, data.unit ?? 'px', scale)
-      if (!data.overrides.length) return text(body)
-      const tweaks = data.overrides
-        .map(
-          (o) =>
-            `- ${o.nodeId}: offset ${q(o.dx)}, ${q(o.dy)}` +
-            (o.width != null ? `, size ${q(o.width)}×${q(o.height ?? 0)}` : ''),
-        )
-        .join('\n')
-      return text(`${body}\n\nLive edits (preview only, not in the code):\n${tweaks}`)
+      return text(describeNode(data.node, data.ancestors ?? [], data.unit ?? 'css-px', data.pxPerUnit ?? 1, data.overrides ?? []))
     } catch (err) {
       return fail(err)
     }
@@ -202,9 +224,10 @@ server.registerTool(
   {
     title: 'Edit queue',
     description:
-      'Edits the user sent from the layout-debug window: comment + element artifacts + drag measurements. ' +
-      'Each edit starts with its requestId. Once you have handled an edit, report back via reply_in_window with ' +
-      'that requestId: the user is watching the window, not the terminal, and the id marks that edit as done there.',
+      'Edits the user sent from the layout-debug window that no agent has taken yet: comment + element facts + ' +
+      'drag measurements. Each edit starts with its requestId. In listen mode use wait_for_message instead. Once ' +
+      'you have handled an edit, report back via reply_in_window with that requestId: the user is watching the ' +
+      'window, and the id marks that edit as done there.',
     inputSchema: {
       includeConsumed: z.boolean().default(false).describe('Also show already read edits'),
       markConsumed: z.boolean().default(true).describe('Mark the returned edits as read'),
@@ -240,31 +263,38 @@ server.registerTool(
   {
     title: 'Reply in the layout-debug window',
     description:
-      'Write into the chat of the layout-debug window. Call it after handling an edit from pending_requests: ' +
-      'the user is watching the window, not the terminal, and without this they will not know what you did. ' +
-      'Keep it short: what you changed, in which files, what is left. If the edit could not be made, say why here too. ' +
-      'Write in the same language as the user\'s comment.',
+      'Write into the chat of the layout-debug window. Call it after handling a message from wait_for_message or ' +
+      'pending_requests: the user is watching the window, and without this they will not know what you did. ' +
+      'Keep it short: what you changed, in which files, what is left. If the edit could not be made, say why and ' +
+      'pass status "error". Write in the same language as the user\'s comment.',
     inputSchema: {
       text: z.string().min(1).describe('Text for the window chat'),
-      role: z
-        .enum(['assistant', 'system'])
-        .default('assistant')
-        .describe('assistant — a reply to the user, system — a service note'),
       requestId: z
         .string()
         .min(1)
         .optional()
         .describe(
-          'Reply to a specific request: the requestId shown by pending_requests. The window ties the message to ' +
-            'that edit and marks it done. Omit it to reply generally (no edit changes status).',
+          'The requestId of the message you are answering (from wait_for_message or pending_requests). The window ' +
+            'ties the reply to that edit and closes it. Omit it for a general note (no edit changes status).',
         ),
+      status: z
+        .enum(['done', 'error'])
+        .default('done')
+        .describe('With requestId: "done" when the edit is made, "error" when it could not be made'),
+      role: z
+        .enum(['assistant', 'system'])
+        .default('assistant')
+        .describe('assistant — a reply to the user, system — a service note'),
     },
   },
   // `text` is also the name of the response helper, so the argument is renamed.
-  async ({ text: content, role, requestId }) => {
+  async ({ text: content, requestId, status, role }) => {
     try {
       const payload: PostChatBody = { text: content, role }
-      if (requestId) payload.requestId = requestId
+      if (requestId) {
+        payload.requestId = requestId
+        payload.status = status
+      }
       const body = await api<PostChatResponse>('/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -273,16 +303,19 @@ server.registerTool(
       const tie = !requestId
         ? ''
         : body.requestId === requestId
-          ? ` Edit ${requestId} is marked done.`
-          : ` Note: the server did not match requestId ${requestId} (cleared, mistyped, or a server older than ` +
-            'this MCP build), so the message was posted ' +
-            'as a general reply and no edit changed status. Check the id with pending_requests (includeConsumed: true).'
+          ? ` Edit ${requestId} is marked ${status === 'error' ? 'failed' : 'done'}.`
+          : ` Note: the server did not match requestId ${requestId} (cleared or mistyped), so the message was ` +
+            'posted as a general reply and no edit changed status. Check the id with pending_requests ' +
+            '(includeConsumed: true).'
+      const next = ' Now call wait_for_message again.'
       if (!body.delivered) {
         return text(
-          'Sent, but the layout-debug window is closed right now; the message will appear when it is opened.' + tie,
+          'Sent, but the layout-debug window is closed right now; the message will appear when it is opened.' +
+            tie +
+            next,
         )
       }
-      return text(`Sent to the window (${body.delivered}).${tie}`)
+      return text(`Sent to the window (${body.delivered}).${tie}${next}`)
     } catch (err) {
       return fail(err)
     }

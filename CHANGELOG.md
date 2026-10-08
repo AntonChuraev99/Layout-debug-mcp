@@ -5,6 +5,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 
+One-command install and one agent entry: whatever agent you connect over MCP answers in the window's chat.
+
+### Added
+
+- Published to npm: add `{"command": "npx", "args": ["-y", "layout-debug-mcp"]}` to any MCP client. The package downloads only itself (no agent runtime, no model SDK). Listed in the MCP Registry as `io.github.AntonChuraev99/layout-debug-mcp`.
+- Listen mode: the `open_window` tool starts the local server if needed, opens the window and tells the agent to listen; `wait_for_message` returns the next message or edit from the window as soon as you send it, and "no message yet" before common client timeouts so the agent calls it again. Server instructions repeat the loop for any client.
+- The header shows whether an agent is listening, and how to connect one when none is. Messages sent with no agent wait in the Inbox and go out when an agent starts listening.
+- `reply_in_window` takes `status: "error"` to close a request as failed.
+- The server serves the window itself; `npx layout-debug-mcp window` runs it in the foreground. It stops by itself after 30 minutes with no window and no agent when started by `open_window`.
+- CI on every pull request: type check, unit, e2e, and an install check of the packed tarball on Windows, macOS and Linux. Releases publish to npm and the MCP Registry from a tag.
+
+### Changed
+
+- `layout-debug.config.json` is read from the folder the tool starts in (your project), or from `LD_CONFIG`. `projectDir` defaults to that folder.
+- An invalid `LD_ANDROID_PORT`, `LD_TARGET` or config file now stops the start with a message instead of falling back to defaults.
+- Page text in MCP results is marked as untrusted page data and length-capped.
+- The tree syncs at least once a second while the page keeps changing (it could stall under constant mutations).
+- `POST /api/requests/consume` replaces the `GET` form.
+
+### Removed
+
+- The built-in chat agent on the Claude Agent SDK, and with it the `@anthropic-ai/claude-agent-sdk` dependency (about 250 MB on install). The window's chat is answered by your MCP agent.
+- The header pipette; pick with Alt (or a plain click on Android).
+
+### Security
+
+- The window posts to the framed page's origin instead of `*` and accepts messages only from its own iframe at that origin.
+- Request bodies past 256 KB drop the connection; snapshots are validated node by node; static paths reject Windows device names.
+
 ## [0.1.0] - 2026-10-08
 
 First public release. Install is clone-based (`npm install` + `npm run dev`); one-command install via `npx` and the MCP Registry is planned for 0.2.

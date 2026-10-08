@@ -42,7 +42,7 @@ export function chainOf(id: NodeId, parentOf: (id: NodeId) => NodeId | null | un
 export type PickResult = { kind: 'select'; id: NodeId } | { kind: 'top' }
 
 /**
- * What an Alt+click (or a pipette click) selects.
+ * What an Alt+click selects.
  * - Within REPEAT_PICK_PX of the previous pick, with something selected: one level up
  *   from the selection. On the root there is nowhere to go: `top`, which the window shows.
  * - Otherwise the layer the hover shows: the tightest one under the cursor, raised by
@@ -276,21 +276,19 @@ export function nudgeOverride(
 }
 
 /** What Escape closes, in this order (DESIGN_SPEC §4 "Порядок Esc"); null — nothing. */
-export type EscapeStep = 'coach' | 'chat' | 'details' | 'nudge' | 'pipette' | 'selection'
+export type EscapeStep = 'coach' | 'chat' | 'details' | 'nudge' | 'selection'
 
 export function escapeStep(s: {
   coach: boolean
   chat: boolean
   details: boolean
   nudge: boolean
-  pipette: boolean
   selected: boolean
 }): EscapeStep | null {
   if (s.coach) return 'coach'
   if (s.chat) return 'chat'
   if (s.details) return 'details'
   if (s.nudge) return 'nudge'
-  if (s.pipette) return 'pipette'
   if (s.selected) return 'selection'
   return null
 }

@@ -46,14 +46,10 @@ describe('message rendering', () => {
     assert.equal(errorText('en', err), 'screenshot: HTTP 503')
   })
 
-  test('agent auth and retry texts carry the actionable hint in both languages', () => {
+  test('"no agent listening" says how to connect one, in both languages', () => {
     for (const locale of ['en', 'ru'] as const) {
-      const auth = t(locale, 'agentAuth', { reason: 'HTTP 401' })
-      assert.match(auth, /HTTP 401/)
-      assert.match(auth, /ANTHROPIC_API_KEY/)
-      assert.match(auth, /claude login/)
-      assert.match(auth, /pending_requests/)
-      assert.match(t(locale, 'agentRetrying', { reason: 'HTTP 529', attempt: 2, max: 10 }), /HTTP 529.*2.*10/)
+      assert.match(t(locale, 'queuedNoAgent'), /npx -y layout-debug-mcp/)
+      assert.match(t(locale, 'queuedNoAgent'), /layout-debug/)
     }
   })
 

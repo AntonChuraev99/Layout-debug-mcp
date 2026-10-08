@@ -46,6 +46,46 @@ describe('parseUiMessage: refuses frames handlers cannot use', () => {
   })
 })
 
+describe('parseUiMessage: snapshot nodes are checked deeply (MCP formatting must not throw on them)', () => {
+  const good = {
+    id: 'n1',
+    parentId: null,
+    childIds: [],
+    depth: 0,
+    kind: 'div',
+    label: 'div',
+    bounds: { x: 0, y: 0, w: 10, h: 10 },
+    anchors: { path: 'div', className: 'a b' },
+    styles: { display: 'flex' },
+  }
+  const withNode = (n: unknown) => JSON.stringify({ t: 'snapshot', snapshot: { ...snapshot, rootId: 'n1', nodes: { n1: n } } })
+
+  test('a complete node passes', () => {
+    assert.equal(parseUiMessage(withNode(good)).ok, true)
+  })
+  const broken: Array<[string, unknown, RegExp]> = [
+    ['no anchors', { ...good, anchors: undefined }, /anchors is not an object/],
+    ['anchors.path missing', { ...good, anchors: {} }, /anchors\.path is not a string/],
+    ['className not a string', { ...good, anchors: { path: 'p', className: 5 } }, /anchors\.className is not a string/],
+    ['bounds missing w', { ...good, bounds: { x: 0, y: 0, h: 1 } }, /bounds\.w is not a number/],
+    ['childIds not strings', { ...good, childIds: [1] }, /childIds is not an array of strings/],
+    ['styles with a number', { ...good, styles: { width: 10 } }, /styles is not an object of strings/],
+    ['kind missing', { ...good, kind: undefined }, /kind is not a string/],
+    ['node is null', null, /is not an object/],
+  ]
+  for (const [name, n, reason] of broken) {
+    test(`${name} is refused with the field named`, () => {
+      const r = parseUiMessage(withNode(n))
+      assert.equal(r.ok, false)
+      assert.match(!r.ok ? r.reason : '', reason)
+    })
+  }
+  test('a bad unit or viewport is refused', () => {
+    assert.equal(parseUiMessage(JSON.stringify({ t: 'snapshot', snapshot: { ...snapshot, unit: 'em' } })).ok, false)
+    assert.equal(parseUiMessage(JSON.stringify({ t: 'snapshot', snapshot: { ...snapshot, viewport: { w: 'x' } } })).ok, false)
+  })
+})
+
 describe('parseUiMessage: accepts every valid frame', () => {
   const valid = [
     { t: 'locale', locale: 'ru' },

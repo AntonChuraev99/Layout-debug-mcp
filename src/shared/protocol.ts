@@ -1,11 +1,11 @@
 /**
  * Shared vocabulary for all three processes:
  *   inspector (runs inside the target page)  <-- postMessage -->  UI (browser)
- *   UI  <-- WebSocket -->  server (Node)  <-- in-process -->  MCP / agent
+ *   UI  <-- WebSocket -->  server (Node)  <-- HTTP -->  MCP process (stdio)  <-->  any agent
  *
- * The snapshot format is deliberately target-agnostic: the future Android
- * adapter must be able to produce the exact same shape so the UI and the agent
- * bridge stay unchanged.
+ * The snapshot format is deliberately target-agnostic: the Android adapter
+ * produces the exact same shape, so the UI and the MCP tools do not know where
+ * the data came from.
  */
 
 export const PROTOCOL_TAG = 'layout-debug'
@@ -177,7 +177,7 @@ export interface ChatMessage {
   pending?: boolean
   /**
    * The EditRequest this message answers or belongs to. Set by the server for the
-   * built-in agent's messages and for MCP `reply_in_window` calls that pass one.
+   * user's own submit and for MCP `reply_in_window` calls that pass one.
    * Absent on free-standing messages — the UI must never guess it from the id.
    */
   requestId?: string
@@ -189,9 +189,8 @@ export interface ChatMessage {
  *
  * - `bad_message`       — a UI→server frame failed to parse or validate.
  * - `nothing_selected`  — submit with no snapshot or no selected node.
- * - `agent_auth`        — the built-in agent cannot authenticate (API key / `claude login`); fatal, no retries left.
- * - `agent_retrying`    — the SDK reported an API retry; informational, the request stays `working`.
- * - `agent_failed`      — the built-in agent ended with an error (SDK error, `result.is_error`, crash).
+ * - `agent_failed`      — the connected agent closed the request as failed (`reply_in_window`
+ *                         with `status: "error"`); `message` is the agent's reply, capped.
  * - `device_no_adb`     — adb binary missing / not on PATH.
  * - `device_not_found`  — no device, device offline or unauthorized.
  * - `device_no_bridge`  — device reachable but the debug bridge in the app does not answer.
@@ -203,8 +202,6 @@ export interface ChatMessage {
 export type ErrorCode =
   | 'bad_message'
   | 'nothing_selected'
-  | 'agent_auth'
-  | 'agent_retrying'
   | 'agent_failed'
   | 'device_no_adb'
   | 'device_not_found'
@@ -224,16 +221,16 @@ export const DEVICE_ERROR_CODES: readonly ErrorCode[] = [
 ]
 
 /** Codes tied to a specific EditRequest — the server sets `requestId` on these. */
-export const AGENT_ERROR_CODES: readonly ErrorCode[] = ['agent_auth', 'agent_retrying', 'agent_failed']
+export const AGENT_ERROR_CODES: readonly ErrorCode[] = ['agent_failed']
 
 /**
  * Lifecycle of one EditRequest as the server sees it. The server is the only source
  * of truth; the UI no longer infers it from chat ids.
  *
- * - `queued`  — accepted, nobody is working on it yet (no built-in agent; waits for MCP).
- * - `working` — the built-in agent started on it, or an MCP client consumed it.
- * - `done`    — the built-in agent finished cleanly, or MCP replied with this `requestId`.
- * - `error`   — the built-in agent failed; `code` + `message` say why.
+ * - `queued`  — accepted, no agent has read it yet (waits for `wait_for_message` / `pending_requests`).
+ * - `working` — an agent received it: `wait_for_message` returned it, or `pending_requests` read it.
+ * - `done`    — the agent replied with this `requestId` (`reply_in_window`).
+ * - `error`   — the agent replied with `status: "error"`; `code` + `message` say why.
  */
 export type RequestStatus = 'queued' | 'working' | 'done' | 'error'
 
@@ -245,8 +242,10 @@ export type RequestStatus = 'queued' | 'working' | 'done' | 'error'
 export interface PostChatBody {
   text: string
   role?: 'assistant' | 'system'
-  /** Ties the reply to a request: the message carries it, and the request goes `done`. */
+  /** Ties the reply to a request: the message carries it, and the request goes `done` (or `error`). */
   requestId?: string
+  /** With `requestId`: how the request ends. Default `done`; `error` closes it as failed. */
+  status?: 'done' | 'error'
 }
 
 /** POST /api/chat response. `requestId` echoes back only when it matched a known request. */
@@ -258,7 +257,7 @@ export interface PostChatResponse {
 
 /**
  * POST /api/requests/consume body. `ids` marks only those requests consumed (→ `working`);
- * omitted means "all unconsumed" — kept for older MCP builds that call it with GET.
+ * omitted means "all unconsumed".
  */
 export interface ConsumeRequestsBody {
   ids?: string[]
@@ -269,6 +268,32 @@ export interface ConsumeRequestsResponse {
   ok: true
   /** Ids that actually changed from unconsumed to consumed. */
   consumed: string[]
+}
+
+/**
+ * POST /api/requests/wait?timeout=<1..50 s> (MCP `wait_for_message`): the oldest request no
+ * agent has read yet, as soon as there is one, or `timeout` when none came in time.
+ */
+export type WaitResponse = { request: EditRequest } | { timeout: true }
+
+/** GET /api/health. `name` tells this server apart from another program on the port. */
+export interface HealthResponse {
+  ok: true
+  name: 'layout-debug-mcp'
+  version: string
+  pid: number
+  /** Connected window sockets. */
+  windows: number
+  /**
+   * An agent is waiting for messages, was a few seconds ago, or is still working on a
+   * request wait_for_message gave it (until it replies or the queue is cleared).
+   */
+  listening: boolean
+  /** Where the window is served: the server itself (package) or the Vite dev server (checkout). */
+  windowUrl: string
+  target: TargetKind
+  targetUrl: string
+  projectDir: string
 }
 
 /** Error body of every /api/* failure (4xx/5xx). */
@@ -301,8 +326,14 @@ export type ServerToUi =
       device: string | null
       /** `ro.product.model` of the device, e.g. "Pixel 8"; null on web or when adb cannot tell. */
       deviceModel: string | null
-      agentAvailable: boolean
+      /** An agent is waiting for messages over MCP; later changes come as `agentStatus`. */
+      listening: boolean
     }
+  /**
+   * The "agent listening" state changed. Listening = a wait_for_message call is open, one
+   * ended < 10 s ago, or a request it handed out is still `working` (no reply yet).
+   */
+  | { t: 'agentStatus'; listening: boolean }
   | { t: 'chat'; message: ChatMessage }
   | { t: 'chatDone' }
   | { t: 'requests'; requests: EditRequest[] }
@@ -314,5 +345,5 @@ export type ServerToUi =
   | { t: 'requestStatus'; id: string; status: RequestStatus; code?: ErrorCode; message?: string }
   /** Android snapshot pushed by the server; `frame` busts the screenshot cache. */
   | { t: 'androidSnapshot'; snapshot: Snapshot; frame: number }
-  /** `message` is localized human text; branch on `code`. `requestId` is set for agent errors. */
+  /** `message` is localized human text; branch on `code`. `requestId` is set for request errors. */
   | { t: 'error'; code: ErrorCode; message: string; requestId?: string }

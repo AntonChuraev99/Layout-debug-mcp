@@ -16,12 +16,64 @@ function overrideProblem(v: unknown): string | null {
   return null
 }
 
+/** Far above any real page; a bigger "snapshot" is a bug or an abuse. */
+export const MAX_SNAPSHOT_NODES = 50_000
+
+const OPTIONAL_ANCHORS = ['sourceLoc', 'domId', 'testId', 'className', 'text'] as const
+
+function rectProblem(v: unknown, where: string): string | null {
+  if (!isObject(v)) return `${where} is not an object`
+  for (const k of ['x', 'y', 'w', 'h'] as const) if (!isNumber(v[k])) return `${where}.${k} is not a number`
+  return null
+}
+
+/**
+ * Every field the MCP formatters and Session.buildRequest read, so a node from a
+ * page that is not our inspector cannot make them throw later.
+ */
+function nodeProblem(v: unknown, key: string): string | null {
+  const where = `snapshot.nodes[${JSON.stringify(key.slice(0, 40))}]`
+  if (!isObject(v)) return `${where} is not an object`
+  if (typeof v.id !== 'string') return `${where}.id is not a string`
+  if (v.parentId !== null && typeof v.parentId !== 'string') return `${where}.parentId is not a string or null`
+  if (!Array.isArray(v.childIds) || v.childIds.some((c) => typeof c !== 'string')) {
+    return `${where}.childIds is not an array of strings`
+  }
+  if (!isNumber(v.depth)) return `${where}.depth is not a number`
+  if (typeof v.kind !== 'string') return `${where}.kind is not a string`
+  if (typeof v.label !== 'string') return `${where}.label is not a string`
+  const rect = rectProblem(v.bounds, `${where}.bounds`)
+  if (rect) return rect
+  const a = v.anchors
+  if (!isObject(a)) return `${where}.anchors is not an object`
+  if (typeof a.path !== 'string') return `${where}.anchors.path is not a string`
+  for (const k of OPTIONAL_ANCHORS) {
+    if (a[k] != null && typeof a[k] !== 'string') return `${where}.anchors.${k} is not a string`
+  }
+  if (!isObject(v.styles) || Object.values(v.styles).some((s) => typeof s !== 'string')) {
+    return `${where}.styles is not an object of strings`
+  }
+  return null
+}
+
 function snapshotProblem(v: unknown): string | null {
   if (!isObject(v)) return 'snapshot is not an object'
   if (typeof v.rootId !== 'string') return 'snapshot.rootId is not a string'
   if (!isObject(v.nodes)) return 'snapshot.nodes is not an object'
   if (v.target !== 'web' && v.target !== 'android') return 'snapshot.target is not web/android'
   if (!isNumber(v.pxPerUnit)) return 'snapshot.pxPerUnit is not a number'
+  if (v.unit != null && v.unit !== 'css-px' && v.unit !== 'dp') return 'snapshot.unit is not css-px/dp'
+  if (v.viewport != null) {
+    if (!isObject(v.viewport) || !isNumber(v.viewport.w) || !isNumber(v.viewport.h)) {
+      return 'snapshot.viewport is not {w, h} numbers'
+    }
+  }
+  const entries = Object.entries(v.nodes)
+  if (entries.length > MAX_SNAPSHOT_NODES) return `snapshot has ${entries.length} nodes, more than ${MAX_SNAPSHOT_NODES}`
+  for (const [key, node] of entries) {
+    const p = nodeProblem(node, key)
+    if (p) return p
+  }
   return null
 }
 

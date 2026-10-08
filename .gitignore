@@ -17,8 +17,18 @@ layout-debug.config.json
 # Vite cache
 .vite/
 
-# Claude Code worktrees
+# Claude Code worktrees and local settings
 .claude/worktrees/
+.claude/settings.local.json
+
+# Editors
+.idea/
+.vscode/
+
+# Build and test leftovers
+coverage/
+*.tsbuildinfo
+*.tgz
 
 # Release assets (uploaded to GitHub Releases)
 release-media/

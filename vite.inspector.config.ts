@@ -3,6 +3,8 @@ import { defineConfig } from 'vite'
 // The inspector is injected into the *target* page, so it must be a single
 // self-contained classic script with no imports and no module semantics.
 export default defineConfig({
+  // public/ (the window's favicon) belongs to dist/ui only.
+  publicDir: false,
   build: {
     outDir: 'dist/inspector',
     emptyOutDir: true,

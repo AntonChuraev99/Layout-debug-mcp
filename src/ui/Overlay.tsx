@@ -44,8 +44,8 @@ export interface OriginGhost {
   base: Rect
 }
 
-/** How a pick was made: the window counts Alt picks and turns the pipette off after one. */
-export type PickSource = 'alt' | 'pipette' | 'click'
+/** How a pick was made: the window counts Alt picks (the hint folds after a few). */
+export type PickSource = 'alt' | 'click'
 
 export interface Mark {
   nodeId: NodeId
@@ -70,8 +70,6 @@ interface Props {
   selectedId: NodeId | null
   /** Alt is held: the whole frame is the overlay's — hover inspects, click selects. */
   alt: boolean
-  /** The header pipette is on: like Alt, for one pick. */
-  pipette: boolean
   /** Android: no input channel to the device, so a plain hover inspects and a plain click selects. */
   clickSelects: boolean
   /** Live tweaks can be sent (false: Android without the server). The selected layer can be dragged and sized. */
@@ -103,6 +101,8 @@ interface Props {
   /** The "Talk cursor" bubble: its text, and the folded "•••" once the user has learned picking. */
   cursorLabel: string
   cursorCompact: boolean
+  /** An agent is listening: a queued mark reads "Queued", otherwise "Waiting for agent". */
+  agentListening?: boolean
   apiRef?: Ref<OverlayApi>
 }
 
@@ -125,7 +125,6 @@ export function Overlay({
   overrides,
   selectedId,
   alt,
-  pipette,
   clickSelects,
   canTweak,
   scale,
@@ -143,6 +142,7 @@ export function Overlay({
   onForwardWheel,
   cursorLabel,
   cursorCompact,
+  agentListening = true,
   apiRef,
 }: Props) {
   const { t } = useT()
@@ -152,15 +152,15 @@ export function Overlay({
   const [topAt, setTopAt] = useState(0)
   const dragRef = useRef<Drag | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
-  /** Where the previous Alt / pipette pick landed (frame display px): a repeat within 4 px climbs. */
+  /** Where the previous Alt pick landed (frame display px): a repeat within 4 px climbs. */
   const lastPick = useRef<Point | null>(null)
   const wheelAcc = useRef({ acc: 0, at: 0 })
 
   // Alt while dragging changes nothing: the drag goes on.
-  const picking = (alt || pipette) && !drag
+  const picking = alt && !drag
   const hoverOn = (picking || clickSelects) && !drag
   const zonesOn = !picking && canTweak && Boolean(selectedId)
-  const pickSource: PickSource = pipette ? 'pipette' : alt ? 'alt' : 'click'
+  const pickSource: PickSource = alt ? 'alt' : 'click'
 
   useEffect(() => {
     if (!hoverOn) setHover(null)
@@ -171,7 +171,7 @@ export function Overlay({
   const followMode = (picking || clickSelects) && !drag
   const followModeRef = useRef(followMode)
   followModeRef.current = followMode
-  // Alt released, the pipette used up, a drag started: gone before the next paint.
+  // Alt released, a drag started: gone before the next paint.
   useLayoutEffect(() => {
     if (!followMode) talk.current?.hide()
   }, [followMode])
@@ -384,7 +384,7 @@ export function Overlay({
     }
     if (pickNow || hoverOn) {
       e.preventDefault()
-      pickAt(local, pickNow ? (pipette ? 'pipette' : 'alt') : 'click')
+      pickAt(local, pickNow ? 'alt' : 'click')
     }
   }
 
@@ -396,8 +396,8 @@ export function Overlay({
   }
 
   // Wheel: a native listener, because React's is passive and preventDefault must hold.
-  const wheelState = useRef({ picking, pipette, zonesOn, clickSelects, hover, selectedId, scale })
-  wheelState.current = { picking, pipette, zonesOn, clickSelects, hover, selectedId, scale }
+  const wheelState = useRef({ picking, zonesOn, clickSelects, hover, selectedId, scale })
+  wheelState.current = { picking, zonesOn, clickSelects, hover, selectedId, scale }
   const wheelFns = useRef({ hitTest, parentOf, onSelect, onForwardWheel, toLocal })
   wheelFns.current = { hitTest, parentOf, onSelect, onForwardWheel, toLocal }
   useEffect(() => {
@@ -408,7 +408,7 @@ export function Overlay({
       const f = wheelFns.current
       if (dragRef.current) return
       const local = f.toLocal(e.clientX, e.clientY)
-      if (altHeld(e) || s.pipette || (s.picking && !s.clickSelects)) {
+      if (altHeld(e) || (s.picking && !s.clickSelects)) {
         e.preventDefault()
         const delta = e.deltaY || e.deltaX
         const { steps, state } = accumulateWheel(wheelAcc.current, e.deltaMode === 1 ? delta * 40 : delta, e.timeStamp)
@@ -532,7 +532,7 @@ export function Overlay({
             {m.kind === 'queued' && !isSelected && (
               <Label canvasBox={toCanvas(r)} canvasWidth={canvasWidth} className="chip chip--queued">
                 <IconInbox size={12} />
-                {t('tag.queued')}
+                {t(agentListening ? 'tag.queued' : 'tag.waiting')}
               </Label>
             )}
           </div>

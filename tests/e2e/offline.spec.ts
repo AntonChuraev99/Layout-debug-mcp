@@ -16,7 +16,8 @@ const logs: string[] = []
 
 function env(): NodeJS.ProcessEnv {
   const e: NodeJS.ProcessEnv = { ...process.env, LD_UI_PORT: String(UI_PORT), LD_SERVER_PORT: String(SERVER_PORT), NODE_OPTIONS: IPV4_FIRST }
-  // A developer's own LD_* settings must not leak in (a project dir would switch the real agent on).
+  // A developer's own LD_* settings must not leak in: a target or a server URL from the shell
+  // would change what this instance serves and where the window looks for it.
   for (const k of ['LD_PROJECT_DIR', 'LD_TARGET', 'LD_TARGET_URL', 'LD_SERVER_URL']) delete e[k]
   return e
 }

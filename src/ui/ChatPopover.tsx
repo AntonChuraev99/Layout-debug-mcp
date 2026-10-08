@@ -2,9 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChatMessage, EditRequest } from '../shared/protocol.ts'
 import { useT } from './i18n.ts'
 import { describeOverride } from './NodeDetails.tsx'
-import { BrandGlyph, IconArrowUp, IconChevronLeft, IconCircleX, IconFile, IconInbox, IconRefresh, IconX } from './icons.tsx'
+import { BrandGlyph, IconArrowUp, IconChevronLeft, IconCircleX, IconInbox, IconPlug, IconRefresh, IconX } from './icons.tsx'
 import { REFRESH_NOTE_PREFIX } from './refresh.ts'
-import { displayLabel, ERROR_LINE_PREFIX, RETRY_LINE_PREFIX, shortenPath } from './thread.ts'
+import { displayLabel, ERROR_LINE_PREFIX, shortenPaths } from './thread.ts'
 
 /** A message typed here that the server has not echoed back yet. */
 export interface LocalMessage {
@@ -23,20 +23,18 @@ interface Props {
   local: LocalMessage[]
   requestsById: ReadonlyMap<string, EditRequest>
   projectDir: string | null
-  agentAvailable: boolean
+  /** An agent is listening over MCP; without one, messages wait in the Inbox. */
+  listening: boolean
+  /** Requests of this thread still waiting for an agent to take them. */
+  queuedIds: ReadonlySet<string>
   online: boolean
-  /**
-   * The built-in agent is still running a request (any element, any window). The server
-   * does not queue runs, so a second message now would edit the project in parallel.
-   */
-  agentBusy: boolean
   /** The agent is on one of this element's requests and has not started replying. */
   working: boolean
   /** Live tweak that will travel with the next message, already worded. */
   attach: string | null
-  /** The element's latest request failed because the agent cannot sign in. */
-  authError: boolean
   onSend: (text: string) => void
+  /** Opens the header's "how to connect an agent" popover. */
+  onConnect: () => void
   onBack: () => void
   onClose: () => void
 }
@@ -75,9 +73,7 @@ export function ChatPopover(props: Props) {
     ? t('chat.offline')
     : props.missing
       ? t('chat.missingBlocked')
-      : props.agentBusy
-        ? t('chat.agentBusy')
-        : null
+      : null
 
   const flash = (message: string) => {
     window.clearTimeout(hintTimer.current)
@@ -121,19 +117,14 @@ export function ChatPopover(props: Props) {
           {t('chat.missing')}
         </div>
       )}
-      {props.authError && (
-        <div className="notice notice--danger" role="alert">
-          <IconCircleX size={15} />
-          <div className="notice__body">
-            <span className="notice__title">{t('agent.authTitle')}</span>
-            <span>{rich('agent.authHint', { cmd: <code>claude login</code> })}</span>
-          </div>
-        </div>
-      )}
-      {!props.agentAvailable && !props.missing && (
-        <div className="notice">
-          <IconInbox size={15} />
-          {t('chat.noAgent')}
+      {props.online && !props.listening && !props.missing && (
+        // Not a warning: sending still works, the message just waits for an agent.
+        <div className="notice notice--muted notice--agent">
+          <IconPlug size={15} />
+          <span className="notice__text">{t('chat.noAgent')}</span>
+          <button type="button" className="link-btn" onClick={props.onConnect}>
+            {t('agent.connect')}
+          </button>
         </div>
       )}
 
@@ -154,7 +145,7 @@ export function ChatPopover(props: Props) {
           </div>
         )}
         {props.messages.map((m) => (
-          <Message key={m.id} m={m} request={props.requestsById.get(m.id)} projectDir={props.projectDir} />
+          <Message key={m.id} m={m} request={props.requestsById.get(m.id)} projectDir={props.projectDir} queuedIds={props.queuedIds} />
         ))}
         {props.local.map((m) => (
           <div key={m.key} className={`msg msg--user${m.failed ? '' : ' msg--sending'}`}>
@@ -220,8 +211,15 @@ export function ChatPopover(props: Props) {
   )
 }
 
-function Message({ m, request, projectDir }: { m: ChatMessage; request: EditRequest | undefined; projectDir: string | null }) {
-  const { t, rich } = useT()
+interface MessageProps {
+  m: ChatMessage
+  request: EditRequest | undefined
+  projectDir: string | null
+  queuedIds: ReadonlySet<string>
+}
+
+function Message({ m, request, projectDir, queuedIds }: MessageProps) {
+  const { t } = useT()
   if (m.role === 'user') {
     const own = request?.overrides.find((o) => o.nodeId === request.node.id) ?? request?.overrides[0]
     const tweak = own && request ? describeOverride(own, request.pxPerUnit, '', t).trim() : ''
@@ -241,29 +239,21 @@ function Message({ m, request, projectDir }: { m: ChatMessage; request: EditRequ
         </div>
       )
     }
-    if (m.id.startsWith(RETRY_LINE_PREFIX)) {
+    // The server's "no agent is listening" note for a request (`<id>-queued`). It says what
+    // was true at send time; once an agent took the request it is history, not news.
+    if (m.requestId && m.id === `${m.requestId}-queued`) {
+      if (!queuedIds.has(m.requestId)) return null
       return (
-        <div className="msg msg--system msg--retry">
-          <IconRefresh size={14} />
-          <span>{m.text || t('chat.retrying')}</span>
+        <div className="msg msg--system msg--waiting">
+          <IconInbox size={14} />
+          <span>{t('chat.waiting')}</span>
         </div>
       )
     }
-    if (/-reply-/.test(m.id)) {
-      return (
-        <div className="msg msg--tool">
-          <IconFile size={13} />
-          <span className="mono">{shortenPath(m.text.replace(/^→\s*/, ''), projectDir)}</span>
-        </div>
-      )
-    }
-    const queued = m.id.endsWith('-queued')
     return (
       <div className="msg msg--system">
         {m.id.startsWith(REFRESH_NOTE_PREFIX) ? <IconRefresh size={14} /> : <IconInbox size={14} />}
-        <span>
-          {queued ? rich('chat.queued', { tool: <code>pending_requests</code> }) : m.text}
-        </span>
+        <span>{m.text}</span>
       </div>
     )
   }
@@ -272,7 +262,7 @@ function Message({ m, request, projectDir }: { m: ChatMessage; request: EditRequ
       <span className="avatar">
         <BrandGlyph size={13} />
       </span>
-      <div className="msg__text">{m.text || (m.pending ? '…' : t('chat.noReply'))}</div>
+      <div className="msg__text">{m.text ? shortenPaths(m.text, projectDir) : m.pending ? '…' : t('chat.noReply')}</div>
     </div>
   )
 }

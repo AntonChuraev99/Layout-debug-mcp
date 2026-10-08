@@ -28,4 +28,8 @@ The server listened on all interfaces, the WebSocket did not check `Origin`, and
 
 ## Rule
 
-Every new endpoint or agent tool goes through `src/server/security.ts` and the `toolGuard` hook in `src/server/agent.ts`. Threat model and known gaps: `SECURITY.md`.
+Every new endpoint or MCP tool goes through `src/server/security.ts`. Threat model and known gaps: `SECURITY.md`.
+
+## Update 2026-10-08
+
+The chat agent was removed in v0.2 ([MCP as the only agent entry](mcp-only-listen-mode-2026-10-08.md)), and with it `checkWritePath`, `ALLOWED_TOOLS`, `settingSources` and the `toolGuard` hook. The packaged server also serves the window on its own port, so the allowed origins are the Vite window and the server port. The window posts to the iframe's origin and accepts messages only from it.

@@ -10,7 +10,7 @@ import {
   INSPECTOR_TAG,
   openWindow,
   palette,
-  pipetteButton,
+  pickHint,
   selectInFrame,
   serveDir,
   test,
@@ -52,8 +52,9 @@ test('1 empty state: no target → open a URL typed without a scheme', async ({ 
   await expect(page.getByRole('heading', { name: 'Open the page you want to edit' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'http://localhost:5173' })).toBeVisible()
   await expect(page.locator('iframe')).toHaveCount(0)
-  // Nothing to inspect yet: the pipette says why instead of doing nothing.
-  await expect(pipetteButton(page)).toHaveAttribute('aria-disabled', 'true')
+  // Nothing to inspect yet: the pick hint dims and says why.
+  await expect(pickHint(page)).toHaveClass(/\bis-blocked\b/)
+  await expect(pickHint(page)).toHaveAttribute('title', 'Open a page first')
 
   const typed = DEMO_URL.replace(/^http:\/\//, '')
   await addressField(page).fill(typed)
@@ -65,7 +66,8 @@ test('1 empty state: no target → open a URL typed without a scheme', async ({ 
   await waitForServerSnapshot(since, (n) => n.anchors.testId === 'cta-continue')
   await expect(page.getByText(/^\d+ layers$/)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Open the page you want to edit' })).toHaveCount(0)
-  await expect(pipetteButton(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(pickHint(page)).not.toHaveClass(/\bis-blocked\b/)
+  await expect(pickHint(page)).not.toHaveAttribute('title')
 })
 
 test('13 language switch EN → RU survives a reload', async ({ page }) => {
@@ -75,7 +77,7 @@ test('13 language switch EN → RU survives a reload', async ({ page }) => {
 
   await lang.getByRole('radio', { name: 'Русский' }).click()
   await expect(page.getByRole('button', { name: 'Открыть', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Выбрать слой — или зажми Alt' })).toBeVisible()
+  await expect(pickHint(page)).toContainText('наведи — подсветка · клик — выделить')
   await expect(page.locator('html')).toHaveAttribute('lang', 'ru')
 
   await page.reload()

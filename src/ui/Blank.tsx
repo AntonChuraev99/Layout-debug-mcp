@@ -16,7 +16,8 @@ export function Blank({ icon, title, children }: { icon: ReactNode; title: strin
 }
 
 /** Monospace snippet with a copy button; the result is announced and shown for 1.8 s. */
-export function CopyBlock({ text }: { text: string }) {
+/** `prose`: words to paste into a chat rather than code, set in the text face. */
+export function CopyBlock({ text, prose = false }: { text: string; prose?: boolean }) {
   const [state, setState] = useState<'idle' | 'ok' | 'fail'>('idle')
   const [reason, setReason] = useState('')
   const timer = useRef<number | undefined>(undefined)
@@ -37,7 +38,7 @@ export function CopyBlock({ text }: { text: string }) {
 
   return (
     <div className="codeblock">
-      <code className="mono">{text}</code>
+      <code className={prose ? 'codeblock__prose' : 'mono'}>{text}</code>
       <button
         type="button"
         className={`icon-btn codeblock__copy${state === 'ok' ? ' is-ok' : state === 'fail' ? ' is-fail' : ''}`}

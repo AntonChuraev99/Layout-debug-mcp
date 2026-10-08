@@ -34,88 +34,74 @@ Web has precedents (Onlook, LocatorJS, code-inspector). Selecting any Compose la
 
 - **Select any layer.** Hover highlights the tightest box under the cursor, click selects. Breadcrumbs go up to parents, "Details" goes down to children. Works on wrappers and containers, not only on accessible nodes.
 - **Live edit.** Drag to move, corner handle to resize, hide and show. On the web it's inline styles; on Android the override is applied to the running composition.
-- **Hand-off to an agent.** Each element has its own chat thread. A message carries the element's artifacts: anchors (`file:line`, test id, id, class string, text), box, parent chain, siblings, and your live tweaks as a measured delta in `dp` / `css-px` with box before and after.
+- **Hand-off to your agent.** Each element has its own chat thread. A message carries the element's artifacts: anchors (`file:line`, test id, id, class string, text), box, parent chain, siblings, and your live tweaks as a measured delta in `dp` / `css-px` with box before and after.
+- **Your agent answers in the window.** Whatever agent you use (Claude Code, Codex, Cursor, Copilot, Gemini CLI…) listens to the window over MCP: you write in the element chat, it edits the code and replies in the same chat.
 - **Watch it happen.** A shimmer covers the element while the agent works. When the agent replies, the window refreshes the frame on its own, restores your selection and re-applies your other live edits.
-- **Inbox.** Every request with its status (Queued, Agent editing, Done, Error), the agent's steps and time, plus replies that aren't tied to an element.
-- **Two ways in.** An MCP server (stdio) for any MCP client, or an optional built-in chat on the Claude Agent SDK.
+- **Inbox.** Every request with its status (Queued, Agent editing, Done, Error) and time, plus replies that aren't tied to an element.
+- **Light install.** `npx -y layout-debug-mcp` downloads only this package: no agent runtime, no model SDK.
 - **English and Russian UI**, switchable in the header.
 - **Local only.** Window, server and MCP process run on your machine. No cloud, no telemetry.
 
 ## Requirements
 
-- Node.js 22.12+ (20.19+ also works; Vite 7 needs one of these)
+- Node.js 22.12+ (20.19+ also works)
+- Any MCP client: Claude Code, Codex CLI, Cursor, VS Code (Copilot), Claude Desktop, Gemini CLI, Devin Desktop, Zed, or an agent built on an SDK with MCP support
 - Chrome, Edge, Firefox or another current browser for the window
 - For Android: `adb` in `PATH` and an app built in **debug** with the on-device agent (see [Android](#android))
 
-Playwright and its browsers are only needed to run the e2e tests, not to use the tool.
-
 ## Quick start
 
-Try it on the bundled demo page, no configuration:
+1. Add the MCP server to your client ([snippets below](#connect-your-mcp-client)). It's one line:
 
-```bash
-git clone https://github.com/AntonChuraev99/Layout-debug-mcp.git
-cd Layout-debug-mcp
-npm install
-npm run dev
-```
+   ```json
+   { "command": "npx", "args": ["-y", "layout-debug-mcp"] }
+   ```
 
-Open **http://127.0.0.1:5174**. The demo page is already loaded: hover, click, drag, write a comment.
+2. In your project, tell your agent:
 
-`npm run dev` starts three processes: the inspector bundle in watch mode, the server on `127.0.0.1:5175` and the window on `127.0.0.1:5174`. **Keep it running in its own terminal for the whole session.** The MCP server is a thin client of this server and does nothing on its own.
+   > *Open the layout-debug window and listen for my edits.*
 
-Ports taken? `npm run dev` then stops with the reason (for example `port … is already in use`) instead of running half-started. Start on another pair, for example `LD_UI_PORT=5184 LD_SERVER_PORT=5185 npm run dev` (PowerShell: `$env:LD_UI_PORT='5184'; $env:LD_SERVER_PORT='5185'; npm run dev`). Then give your MCP client the same `LD_SERVER_PORT`, see below.
+   The agent calls `open_window`: the tool starts its local server, opens the window in your browser (with a bundled demo page until you set your own, see [Connect your own web project](#connect-your-own-web-project)) and starts listening.
 
-Then [connect your MCP client](#connect-your-mcp-client), select something in the window, send a comment and ask the agent: *"take the pending layout requests and apply them"*.
+3. In the window hold `Alt` and click an element, drag it or type what to change, press `Enter`. Your agent gets the request with the element's anchors and measurements, edits the code and answers in the same chat. Then it waits for your next message.
+
+The header shows **Agent listening** while an agent is connected. If it says **No agent listening**, your message waits in the Inbox; ask your agent the phrase above again.
+
+The window runs on `http://127.0.0.1:5175`. Started by `open_window`, it stops by itself after 30 minutes with no window and no agent. Prefer to start it yourself? `npx layout-debug-mcp window` runs it in the foreground until you stop it.
 
 ## Connect your MCP client
 
-The MCP server is a stdio process started from the cloned repo. Use **absolute paths**: clients start it from their own working directory, not from the repo. The recommended command runs the repo's own `tsx` with `node`, so it needs no shell wrapper on Windows, no network and no download:
+The server is the npm package `layout-debug-mcp`, started over stdio. Every client takes the same command:
 
 ```
-command: node
-args:    /abs/path/to/Layout-debug-mcp/node_modules/tsx/dist/cli.mjs
-         /abs/path/to/Layout-debug-mcp/src/mcp/index.ts
+command: npx
+args:    -y layout-debug-mcp
 ```
 
-On Windows write paths with forward slashes (`C:/Users/you/Layout-debug-mcp/...`); every client below accepts them, and JSON needs no escaping.
+The agent's project folder matters: the tool reads `layout-debug.config.json` from the folder the client starts it in (usually your project), and shortens file paths relative to it. Desktop apps (Claude Desktop and similar) may start it elsewhere; then set `LD_PROJECT_DIR` or `LD_CONFIG` in `env`. Use `env` for settings (see [Configuration](#configuration)).
 
-**Changed the server port?** The MCP process looks for the server at `http://127.0.0.1:5175`. If you started `npm run dev` with `LD_SERVER_PORT`, pass the same value to the MCP process (`env` in the snippets below), or set `LD_SERVER_URL`.
-
-The client can show the server as connected before `npm run dev` is up; the tools only fail at call time with "server is unreachable". Setup is verified end to end with Claude Code; the other snippets follow each client's current documentation.
+Setup is verified end to end with Claude Code; the other snippets follow each client's current documentation.
 
 ### Claude Code
 
 ```bash
-claude mcp add --transport stdio --scope user layout-debug -- node /abs/path/to/Layout-debug-mcp/node_modules/tsx/dist/cli.mjs /abs/path/to/Layout-debug-mcp/src/mcp/index.ts
-```
-
-With a custom server port:
-
-```bash
-claude mcp add --transport stdio --scope user layout-debug -e LD_SERVER_PORT=5185 -- node /abs/path/to/Layout-debug-mcp/node_modules/tsx/dist/cli.mjs /abs/path/to/Layout-debug-mcp/src/mcp/index.ts
-```
-
-Windows, PowerShell or cmd:
-
-```powershell
-claude mcp add --transport stdio --scope user layout-debug -- node C:/path/to/Layout-debug-mcp/node_modules/tsx/dist/cli.mjs C:/path/to/Layout-debug-mcp/src/mcp/index.ts
+claude mcp add --transport stdio --scope user layout-debug -- npx -y layout-debug-mcp
 ```
 
 Check it: `claude mcp get layout-debug` should print `Status: √ Connected`; inside a session use `/mcp`. A server added mid-session shows up after the session restarts.
 
-`--scope user` makes it available in every project. `--scope project` writes it into the project's shared `.mcp.json`, and with an absolute path that only works on your machine.
+### Codex CLI
 
-<details>
-<summary>Alternative: <code>npx tsx</code></summary>
+`~/.codex/config.toml` (shared by the Codex CLI, IDE extension and desktop app):
 
-```bash
-claude mcp add --transport stdio --scope user layout-debug -- npx tsx /abs/path/to/Layout-debug-mcp/src/mcp/index.ts
+```toml
+[mcp_servers.layout-debug]
+command = "npx"
+args = ["-y", "layout-debug-mcp"]
+# env = { LD_TARGET_URL = "http://localhost:3000" }
 ```
 
-This works too, with a caveat: started outside the repo, `npx` doesn't see the repo's `tsx` and downloads the latest one from the registry on first run (network needed, a few seconds slower, not pinned by the lockfile). If a client fails with `spawn npx ENOENT` on Windows, wrap it: `-- cmd /c npx tsx C:/path/...`. In Git Bash write `cmd //c`, otherwise MSYS rewrites `/c` into a path.
-
-</details>
+Or: `codex mcp add layout-debug -- npx -y layout-debug-mcp`.
 
 ### Cursor
 
@@ -125,94 +111,67 @@ This works too, with a caveat: started outside the repo, `npx` doesn't see the r
 {
   "mcpServers": {
     "layout-debug": {
-      "command": "node",
-      "args": [
-        "/abs/path/to/Layout-debug-mcp/node_modules/tsx/dist/cli.mjs",
-        "/abs/path/to/Layout-debug-mcp/src/mcp/index.ts"
-      ],
-      "env": { "LD_SERVER_PORT": "5175" }
+      "command": "npx",
+      "args": ["-y", "layout-debug-mcp"],
+      "env": { "LD_TARGET_URL": "http://localhost:3000" }
     }
   }
 }
 ```
 
-The `env` block is optional; it's shown here because it's where a changed port goes. The same `env` object works in Claude Desktop, Devin Desktop and Gemini CLI configs.
+The `env` block is optional. The same shape works in Claude Desktop, Devin Desktop and Gemini CLI configs.
 
 ### VS Code (Copilot agent mode)
 
-User level (command **MCP: Open User Configuration**, fits best since the path is absolute anyway) or `.vscode/mcp.json` in a workspace. Note the key is `servers` and `type` is required:
+Command **MCP: Open User Configuration**, or `.vscode/mcp.json` in a workspace. The key is `servers` and `type` is required:
 
 ```json
 {
   "servers": {
-    "layout-debug": {
-      "type": "stdio",
-      "command": "node",
-      "args": [
-        "/abs/path/to/Layout-debug-mcp/node_modules/tsx/dist/cli.mjs",
-        "/abs/path/to/Layout-debug-mcp/src/mcp/index.ts"
-      ]
-    }
+    "layout-debug": { "type": "stdio", "command": "npx", "args": ["-y", "layout-debug-mcp"] }
   }
 }
 ```
 
 ### Claude Desktop
 
-Settings → Developer → Edit Config opens `claude_desktop_config.json` (Windows: `%APPDATA%\Claude\`, macOS: `~/Library/Application Support/Claude/`):
+Settings → Developer → Edit Config opens `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
-    "layout-debug": {
-      "command": "node",
-      "args": [
-        "/abs/path/to/Layout-debug-mcp/node_modules/tsx/dist/cli.mjs",
-        "/abs/path/to/Layout-debug-mcp/src/mcp/index.ts"
-      ]
-    }
+    "layout-debug": { "command": "npx", "args": ["-y", "layout-debug-mcp"] }
   }
 }
 ```
 
-**Fully quit and restart** Claude Desktop after editing. Logs: `%APPDATA%\Claude\logs\mcp-server-layout-debug.log` on Windows, `~/Library/Logs/Claude/` on macOS.
+**Fully quit and restart** Claude Desktop after editing.
 
-### Codex CLI
+### Gemini CLI, Devin Desktop, Zed, others
 
-`~/.codex/config.toml` (or `.codex/config.toml` in a trusted project; shared by the Codex CLI, IDE extension and desktop app):
+Same `command` / `args` / `env`:
 
-```toml
-[mcp_servers.layout-debug]
-command = "node"
-args = ["/abs/path/to/Layout-debug-mcp/node_modules/tsx/dist/cli.mjs", "/abs/path/to/Layout-debug-mcp/src/mcp/index.ts"]
-# env = { LD_SERVER_PORT = "5185" }
-```
+- **Gemini CLI**: `~/.gemini/settings.json` under `mcpServers`, or `gemini mcp add layout-debug npx -y layout-debug-mcp`.
+- **Devin Desktop** (formerly Windsurf): `mcp_config.json` under `mcpServers`, or `devin mcp add layout-debug -- npx -y layout-debug-mcp`.
+- **Zed**: `context_servers` in settings, `"command": "npx", "args": ["-y", "layout-debug-mcp"]`.
+- **Agent SDKs** (OpenAI Agents SDK, Vercel AI SDK, LangChain, Claude Agent SDK): use their stdio MCP client with the same command.
 
-Or from the terminal:
-
-```bash
-codex mcp add layout-debug -- node /abs/path/to/Layout-debug-mcp/node_modules/tsx/dist/cli.mjs /abs/path/to/Layout-debug-mcp/src/mcp/index.ts
-```
-
-### Devin Desktop (formerly Windsurf), Gemini CLI, others
-
-Same `command` / `args` / `env` under `mcpServers`:
-
-- **Devin Desktop** (Windsurf was renamed in June 2026): `~/.config/devin/mcp_config.json` on macOS/Linux, `%APPDATA%\devin\mcp_config.json` on Windows, or project `.devin/mcp_config.json`. CLI: `devin mcp add layout-debug -- node <args>`.
-- **Gemini CLI**: `~/.gemini/settings.json` (user) or `.gemini/settings.json` (project). CLI: `gemini mcp add layout-debug node <args>`.
+On Windows, if a client fails with `spawn npx ENOENT`, use `"command": "cmd", "args": ["/c", "npx", "-y", "layout-debug-mcp"]`.
 
 ### Tools
 
 | Tool | What it does | Parameters |
 |---|---|---|
+| `open_window` | Starts the local server if it isn't running, opens the window, and tells the agent to start listening | none |
+| `wait_for_message` | Waits for the next message or edit from the window and returns it with the element's artifacts. Returns "no message yet" after the timeout, and the agent calls it again | `timeoutSec` (5–50, default 40) |
+| `reply_in_window` | Writes to the window's chat: what changed, which files, what's left. With `requestId` it closes exactly that request | `text`, `requestId`, `status` (`done` \| `error`), `role` |
 | `layout_snapshot` | Tree of the latest snapshot: nodes, sizes, anchors for finding them in code. Depth-limited | `maxDepth` (1–30, default 8) |
 | `selected_element` | What the user has selected in the window right now: box, anchors, parent chain, live tweaks | none |
-| `pending_requests` | Requests sent from the window: `requestId`, comment, element artifacts, drag measurements. New ones are marked `[NEW]` | `includeConsumed` (default `false`), `markConsumed` (default `true`) |
-| `reply_in_window` | Writes to the window's chat: what changed, which files, what's left. With `requestId` it marks exactly that request Done | `text`, `role` (`assistant` \| `system`), `requestId` (optional) |
+| `pending_requests` | All requests sent from the window, for agents that don't listen | `includeConsumed`, `markConsumed` |
 
-The first three read state, the last one adds to it. If the window is closed, the reply is kept and shown next time it opens, so "agent first, window later" works.
+**Listen mode.** MCP can't push a message to an agent, so the agent waits for it: `wait_for_message` returns as soon as you send something, and returns "no message yet" before common client timeouts (about 60 s), so the agent simply calls it again. The server instructions, `open_window` and every `wait_for_message` result repeat this loop, so any agent follows it. Ask the agent to stop listening when you're done.
 
-MCP is pull-only: the agent doesn't hear about new requests by itself. Ask it to take the pending requests each time, or use the built-in chat.
+Text from the inspected page reaches the agent inside a block marked as untrusted page data, with length limits, so page content can't pose as instructions.
 
 ## Using the window
 
@@ -230,13 +189,12 @@ There are no modes: on the web the page stays live, so clicks, scrolling and typ
 | Hold `Alt` (`⌥ Option` on macOS) | Highlights the tightest box under the cursor; the hint in the header lights up and a "Select to chat" bubble appears next to the cursor |
 | `Alt`+click | Selects the layer and opens its action palette. Another `Alt`+click on the same spot goes up to the parent |
 | `Alt`+wheel | Up to the parent / back down to the tightest layer under the cursor |
-| Pipette (header) | Picks one layer without a key, then turns itself off |
 | Drag the selected layer | Moves the element **in the page / on the device**; corner handles resize. A layer covering most of the frame is dragged by its label, so the page under it stays clickable |
 | `Esc` or ✕ in the palette | Clears the selection |
 
 Clicks outside the selected layer go to the page and keep the selection. On Android the window can't send clicks to the device yet, so a plain hover highlights and a plain click selects.
 
-With the frame focused: `Enter` goes down to the first child, `Shift+Enter` up to the parent, `Tab` / `Shift+Tab` to siblings. `Esc` closes the first-run hint, the chat, Details, arrow nudging and the pipette in turn, then clears the selection. Shortcuts also work with a non-Latin keyboard layout.
+With the frame focused: `Enter` goes down to the first child, `Shift+Enter` up to the parent, `Tab` / `Shift+Tab` to siblings. `Esc` closes the first-run hint, the chat, Details and arrow nudging in turn, then clears the selection. Shortcuts also work with a non-Latin keyboard layout.
 
 On the web the header also has a **Page address** field: paste any dev server URL and press Open.
 
@@ -264,15 +222,15 @@ Appears next to the selected element, with breadcrumbs of its parents on top:
 </p>
 
 1. Select an element, press `C`, describe the change, `Enter` to send (`Shift+Enter` for a new line). Live tweaks on that element go along as measurements.
-2. With `projectDir` set, the built-in agent picks it up. Without it the request is **queued for MCP** and the element gets a "queued" mark.
+2. A listening agent receives it at once through `wait_for_message`. With no agent listening the request is **queued**: the element gets a "queued" mark and the window says how to connect an agent; the request goes out as soon as one listens.
 3. While the agent works, a shimmering blur covers the element.
-4. When the agent replies (`reply_in_window` with the `requestId`, or the built-in chat finishes), the window waits about 1.5 s for your dev server's hot reload. If the frame didn't update, it reloads the page (Android: grabs a fresh frame), restores the selection by anchor, re-applies your other live edits and removes the blur. The reply appears in the element's thread.
+4. When the agent replies (`reply_in_window` with the `requestId`), the window waits about 1.5 s for your dev server's hot reload. If the frame didn't update, it reloads the page (Android: grabs a fresh frame), restores the selection by anchor, re-applies your other live edits and removes the blur. The reply appears in the element's thread.
 
 ### Inbox
 
 <img src="./.github/media/inbox-progress.png" width="70%" alt="Inbox with a request in the Agent editing state">
 
-The Inbox icon in the header shows a counter of open requests. Inside: every request with its status (Queued, Agent editing, Done, Error), the agent's steps and time, replies that aren't tied to an element, and agent errors with the next step (for example, how to sign in when the built-in agent can't reach Claude). Filter by Active or All.
+The Inbox icon in the header shows a counter of open requests. Inside: every request with its status (Queued, Agent editing, Done, Error) and time, replies that aren't tied to an element, and errors with the next step. Filter by Active or All.
 
 ### Language
 
@@ -288,16 +246,13 @@ The window is in English by default. The `EN | RU` switch in the header changes 
 
    Use your `LD_SERVER_PORT` if you changed it. The script talks only to the parent window (the tool's UI) and sends nothing anywhere else.
 
-2. Copy `layout-debug.config.example.json` to `layout-debug.config.json` in the tool's directory:
+2. Tell the tool where your page is. Either put `layout-debug.config.json` in your project root (the folder your MCP client starts in):
 
    ```json
-   {
-     "targetUrl": "http://localhost:3000",
-     "projectDir": "/abs/path/to/my-web-app"
-   }
+   { "targetUrl": "http://localhost:3000" }
    ```
 
-   `projectDir` is the repo the built-in chat agent may edit. Without it the built-in chat is off and requests queue up for MCP.
+   or set `LD_TARGET_URL` in the client's `env`, or paste the URL into the window's **Page address** field.
 
 For source mapping add a build step that writes `data-source-loc="file:line"` on JSX elements; without it the agent finds the element by `data-testid`, id and the class string.
 
@@ -307,16 +262,10 @@ The on-device agent is a small debug-only component: it walks the real Compose t
 
 > **Status:** the agent works in a spike app and is **not yet packaged as a library**. Publishing it to Maven Central as a one-line `debugImplementation` is the next Android milestone. Until then Android mode is for early testers.
 
-Run the tool in Android mode:
+Switch the tool to Android mode with `{ "target": "android" }` in `layout-debug.config.json` in your project, or with `env` in the MCP client config:
 
-```bash
-LD_TARGET=android LD_DEVICE=emulator-5554 LD_PROJECT_DIR=/abs/path/to/my-app npm run dev
-```
-
-PowerShell:
-
-```powershell
-$env:LD_TARGET='android'; $env:LD_DEVICE='emulator-5554'; $env:LD_PROJECT_DIR='C:/path/to/my-app'; npm run dev
+```json
+{ "command": "npx", "args": ["-y", "layout-debug-mcp"], "env": { "LD_TARGET": "android", "LD_DEVICE": "emulator-5554" } }
 ```
 
 `LD_DEVICE` is needed only when more than one device is attached. The app must be running in a debug build.
@@ -325,20 +274,22 @@ In Android mode the window shows the device frame instead of an iframe, with the
 
 ## Configuration
 
-Environment variables override `layout-debug.config.json` (in the root of the cloned tool), which overrides defaults.
+Environment variables (set them in the MCP client's `env`) override `layout-debug.config.json` in the folder the tool starts in (`LD_CONFIG` points to another file), which overrides defaults.
 
 | Env var | Config key | Default | Meaning |
 |---|---|---|---|
 | `LD_TARGET` | `target` | `web` | `web` or `android` |
 | `LD_TARGET_URL` | `targetUrl` | bundled demo | Page to inspect (web) |
-| `LD_PROJECT_DIR` | `projectDir` | none | Repo the built-in chat agent may edit; unset = built-in chat off, requests queue for MCP |
+| `LD_PROJECT_DIR` | `projectDir` | start folder | Your project; file paths in the window are shown relative to it |
 | `LD_DEVICE` | `device` | none | `adb -s` serial (android) |
 | `LD_ANDROID_PORT` | `androidPort` | `8790` | On-device agent port (android) |
-| `LD_UI_PORT` | none | `5174` | Port of the window |
-| `LD_SERVER_PORT` | none | `5175` | Port of the server; the MCP process reads it too |
+| `LD_SERVER_PORT` | none | `5175` | Port of the server and the window |
 | `LD_SERVER_URL` | none | `http://127.0.0.1:5175` | Where the MCP process finds the server (overrides `LD_SERVER_PORT` there) |
+| `LD_WAIT_SECONDS` | none | `40` | How long `wait_for_message` waits before "no message yet" (5–50) |
+| `LD_NO_BROWSER` | none | unset | `1` = don't open the browser, only print the window URL |
+| `LD_IDLE_EXIT_MINUTES` | none | `30` from `open_window`, off otherwise | Stop the server after this many minutes with no window and no agent; `0` = never |
 
-Both ports must differ; an invalid value fails at start with a message instead of falling back to the default.
+An invalid server setting or a broken config file stops the server at start with a message instead of falling back to the default. An invalid `LD_WAIT_SECONDS` keeps the default and writes a warning to the MCP log.
 
 ## How it works
 
@@ -349,7 +300,7 @@ Both ports must differ; an invalid value fails at start with a message instead o
  └────────────────────┘                               │ snapshot · selection │
                                                       │ request queue        │
           ┌──────────────┐        WebSocket           └───┬──────────────┬───┘
-          │ UI :5174     │ ◄──────────────────────────────┘   local HTTP │
+          │ window :5175 │ ◄──────────────────────────────┘   local HTTP │
           │ frame+overlay│                                ┌──────────────▼───┐
           │ chat · inbox │                                │ MCP stdio server │ ◄── your agent
           └──────────────┘                                └──────────────────┘
@@ -362,8 +313,9 @@ The server owns each request's status (`queued`, `working`, `done`, `error`) and
 ## Security
 
 - The server listens on `127.0.0.1` only and checks `Origin` and `Host` on HTTP and WebSocket requests, so a web page open in your browser can't drive it (including via DNS rebinding).
-- The built-in chat agent may use only `Read`, `Edit`, `Write`, `Grep`, `Glob`; writes are limited to `projectDir`, and `.git/`, `.claude/`, `.mcp.json` and `.env*` are off limits. It loads the project's settings and `CLAUDE.md`, not your user-level Claude Code settings. Reads are not limited yet; see [SECURITY.md](./SECURITY.md) for known gaps.
-- Nothing leaves your machine except what goes to the agent you connect: through MCP, your client's agent; through the built-in chat, Claude via the Claude Agent SDK.
+- The tool has no agent of its own and never edits your code. Your agent does, with the permissions your MCP client gives it.
+- Page text (class names, text, anchors) reaches the agent marked as untrusted page data and length-capped.
+- Nothing leaves your machine except what goes to the agent you connect.
 - The web inspector is added only in dev. The Android agent lives in the debug source set; the spike app still keeps a small inert bridge in the main source set, which the library will split into `-agent` / `-noop` artifacts.
 
 Found a vulnerability? See [SECURITY.md](./SECURITY.md).
@@ -371,21 +323,20 @@ Found a vulnerability? See [SECURITY.md](./SECURITY.md).
 ## Limitations
 
 - Live edits are a **preview**, not code: they vanish on page reload or app rebuild until the agent writes them into the source.
-- MCP is pull-only. A request sent to the MCP queue stays "Agent editing" until the agent replies with its `requestId`, or you press "Stop waiting".
-- On npm 11, `npm install` may print an `allow-scripts` warning for `esbuild`; it's harmless (the binary comes from esbuild's platform package).
-- **Web:** the page is shown in an `iframe`, so a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes and synced at most once a second. `file:line` needs your own `data-source-loc` build step (no plugin shipped yet). In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
+- The agent has to be listening. Some agents stop the loop on their own after a while; if the header says **No agent listening**, ask again. A request the agent took stays "Agent editing" until it replies with its `requestId`, or you press "Stop waiting".
+- **Web:** the page is shown in an `iframe`, so a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs your own `data-source-loc` build step (no plugin shipped yet). In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
 - **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| MCP tools answer "server is unreachable at …" | The message names the address it tried, the network error and which variable the address came from. Not running: start `npm run dev`. Running on another `LD_SERVER_PORT`: put the same value (or `LD_SERVER_URL`) into the MCP server's `env` in the client config and restart the session. `curl http://127.0.0.1:5175/api/health` returns `{"ok":true,…}` |
-| Window shows "The window didn't start" | The cause line says what failed (a window script didn't load, or nothing rendered within 15 s). Check that `npm run dev` is still running in its terminal and has no errors, then press "Reload page" |
-| Client doesn't list the server | Absolute paths in the config; `node -v` is 20.19+ / 22.12+ in the environment the client starts from. GUI apps started from the Start menu or Dock may not see a Node from nvm / Volta / fnm: put the absolute path to `node` as `command`. Restart the session (Claude Desktop: fully quit) |
-| Windows: `spawn npx ENOENT` | Use the `node …/tsx/dist/cli.mjs` form, or wrap with `cmd /c npx …` |
+| Header says **No agent listening** | Tell your agent: *"Open the layout-debug window and listen for my edits."* Check that the client lists the `layout-debug` server (`/mcp` in Claude Code) |
+| MCP tools answer "server is unreachable at …" | The message names the address it tried and the network error. Ask the agent to call `open_window`, which starts the server. On another port: set the same `LD_SERVER_PORT` (or `LD_SERVER_URL`) in the client's `env`. `curl http://127.0.0.1:5175/api/health` returns `{"ok":true,…}`. Server log: `layout-debug-mcp-<port>.log` in the system temp folder |
+| Window shows "The window didn't start" | The cause line says what failed (a window script didn't load, or nothing rendered within 15 s). Ask the agent to call `open_window` again, then press "Reload page" |
+| Client doesn't list the server | `node -v` is 20.19+ / 22.12+ in the environment the client starts from. GUI apps started from the Start menu or Dock may not see a Node from nvm / Volta / fnm: put the absolute path to `npx` as `command`. Restart the session (Claude Desktop: fully quit) |
+| Windows: `spawn npx ENOENT` | Use `"command": "cmd", "args": ["/c", "npx", "-y", "layout-debug-mcp"]` |
 | Window says the inspector didn't respond | The script tag is in the page, the target allows framing (`X-Frame-Options`, CSP `frame-ancestors`), CSP `script-src` allows `127.0.0.1:5175` |
-| Inbox shows "The agent can't sign in to Claude" | The built-in chat has no credentials: run `claude login` in a terminal or set `ANTHROPIC_API_KEY` for the server, restart it, send again |
 | Android: "adb not found" / "No device connected" | `adb devices` lists exactly one device with status `device` (or set `LD_DEVICE`); the window picks it up without a reload |
 | Android: "The device is there, but the app is silent" | The app runs as a debug build with the agent, listening on `LD_ANDROID_PORT` (8790) |
 
@@ -394,15 +345,15 @@ Found a vulnerability? See [SECURITY.md](./SECURITY.md).
 Pre-1.0. Next up:
 
 1. Android agent as a published library (Maven Central, `debugImplementation`, `-agent` / `-noop` split).
-2. One-command install: `npx layout-debug-mcp` for the window and `npx -y layout-debug-mcp mcp` for MCP clients, a listing in the official MCP Registry, and a Claude Code plugin.
-3. Clean-machine install checks on Windows, macOS and Linux with Claude Code, Cursor, VS Code and Codex CLI; CI.
+2. A Claude Code plugin.
+3. Clean-machine install checks with Cursor, VS Code, Codex CLI and other clients.
 4. Live video stream from the device over scrcpy (H.264 decoded in the browser with WebCodecs) instead of refreshed snapshots.
 
 Later, driven by demand: before/after snapshot diff, a source-location plugin for Vite/Babel, Compose Desktop, Android Views, Flutter.
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md), [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) and [CHANGELOG.md](./CHANGELOG.md). Bug reports and ideas: [issues](https://github.com/AntonChuraev99/Layout-debug-mcp/issues).
+To work on the tool itself: clone the repo, `npm install`, `npm run dev` (window on `127.0.0.1:5174` with hot reload, server on `5175`, demo page loaded). See [CONTRIBUTING.md](./CONTRIBUTING.md), [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) and [CHANGELOG.md](./CHANGELOG.md). Bug reports and ideas: [issues](https://github.com/AntonChuraev99/Layout-debug-mcp/issues).
 
 ## License
 

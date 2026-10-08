@@ -4,7 +4,7 @@
 
 ## Checks
 
-- [ ] `npm run typecheck && npm run build && npm test` pass
+- [ ] `npm run typecheck && npm run typecheck:e2e && npm test && npm run build && npm run test:e2e` pass
 - [ ] Every new failure path shows a visible message in the UI
 - [ ] `src/shared/protocol.ts` changed → inspector, server, UI, MCP and Android agent updated together
 - [ ] User-visible change → `CHANGELOG.md` (Unreleased)

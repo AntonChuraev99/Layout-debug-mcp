@@ -1,9 +1,41 @@
 {
   "name": "layout-debug-mcp",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
   "type": "module",
-  "description": "Select a layout layer on a live UI, move it for real, and hand the result to an AI agent.",
+  "description": "Select a layout layer on a live UI, move it for real, and hand the result to an AI agent over MCP.",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "layout",
+    "inspector",
+    "debug",
+    "css",
+    "jetpack-compose",
+    "android",
+    "ai-agent"
+  ],
+  "homepage": "https://github.com/AntonChuraev99/Layout-debug-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/AntonChuraev99/Layout-debug-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AntonChuraev99/Layout-debug-mcp.git"
+  },
+  "license": "MIT",
+  "author": "Anton Churaev",
+  "mcpName": "io.github.AntonChuraev99/layout-debug-mcp",
+  "bin": {
+    "layout-debug-mcp": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "demo",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },
@@ -11,18 +43,17 @@
     "dev": "node scripts/dev.mjs",
     "server": "tsx watch src/server/index.ts",
     "mcp": "tsx src/mcp/index.ts",
-    "build": "npm run build:inspector && vite build",
+    "build": "npm run build:inspector && vite build && npm run build:node",
     "build:inspector": "vite build --config vite.inspector.config.ts",
+    "build:node": "node scripts/build-node.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
     "test:e2e": "playwright test",
     "typecheck:e2e": "tsc --noEmit -p tests/e2e"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.220",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
     "ws": "^8.18.3",
     "zod": "^4.1.12"
   },
@@ -33,6 +64,9 @@
     "@types/react-dom": "^19.2.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.0",
+    "esbuild": "^0.28.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vite": "^7.2.0"

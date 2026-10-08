@@ -5,16 +5,13 @@ import { AGENT_ERROR_CODES, DEVICE_ERROR_CODES, type ErrorCode } from '../shared
  * localized and changes with the window language, so it is never parsed.
  *
  * - `capture`  — the device capture path failed: the Android "connect" screen / stale pill;
- * - `retrying` — the agent's API call is being retried: a quiet line in the element's chat,
- *                the request stays in work and nothing turns red;
- * - `request`  — the agent run of one request failed: that request shows the error;
+ * - `request`  — the agent closed one request as failed: that request shows the error;
  * - `general`  — anything else: the status pill and the inbox's "not tied to an element".
  */
-export type ErrorRoute = 'capture' | 'retrying' | 'request' | 'general'
+export type ErrorRoute = 'capture' | 'request' | 'general'
 
 export function errorRoute(code: ErrorCode | undefined, requestId: string | undefined): ErrorRoute {
   if (code && DEVICE_ERROR_CODES.includes(code)) return 'capture'
-  if (code === 'agent_retrying') return 'retrying'
   // An agent error without a request id has nobody to attach to; the pill still shows it.
   if (code && AGENT_ERROR_CODES.includes(code) && requestId) return 'request'
   return 'general'

@@ -53,8 +53,8 @@ describe('Session request status', () => {
     const s = sessionWithSelection()
     const a = s.buildRequest('a')!
     assert.equal(s.setStatus(a.id, 'working'), true)
-    assert.equal(s.setStatus(a.id, 'error', 'agent_auth', 'no key'), true)
-    assert.equal(a.errorCode, 'agent_auth')
+    assert.equal(s.setStatus(a.id, 'error', 'agent_failed', 'no key'), true)
+    assert.equal(a.errorCode, 'agent_failed')
     assert.equal(s.setStatus(a.id, 'working'), false)
     assert.equal(a.status, 'error')
     assert.equal(s.setStatus(a.id, 'done'), true)
@@ -141,5 +141,39 @@ describe('Session.addReply (MCP reply_in_window)', () => {
     s.markConsumed()
     s.addReply('general note', 'system')
     assert.equal(a.status, 'working')
+  })
+
+  test('status "error" closes the request as failed, with the reply as the reason', () => {
+    const s = sessionWithSelection()
+    const a = s.buildRequest('a')!
+    s.markConsumed([a.id])
+    const { matched } = s.addReply('Could not find the component', 'assistant', a.id, 'error')
+    assert.equal(matched, true)
+    assert.equal(a.status, 'error')
+    assert.equal(a.errorCode, 'agent_failed')
+    assert.equal(a.errorMessage, 'Could not find the component')
+  })
+
+  test('the error reason is capped, the chat keeps the full reply', () => {
+    const s = sessionWithSelection()
+    const a = s.buildRequest('a')!
+    const long = 'x'.repeat(2000)
+    const { message } = s.addReply(long, 'assistant', a.id, 'error')
+    assert.equal(message.text, long)
+    assert.equal(a.errorMessage!.length, 500)
+    assert.ok(a.errorMessage!.endsWith('…'))
+  })
+})
+
+describe('Session.undelivered (what wait_for_message hands out)', () => {
+  test('oldest first; consumed and finished requests are left out', () => {
+    const s = sessionWithSelection()
+    const a = s.buildRequest('a')!
+    const b = s.buildRequest('b')!
+    const c = s.buildRequest('c')!
+    assert.deepEqual(s.undelivered().map((r) => r.id), [a.id, b.id, c.id])
+    s.markConsumed([b.id])
+    s.addReply('no', 'assistant', c.id, 'error')
+    assert.deepEqual(s.undelivered().map((r) => r.id), [a.id])
   })
 })

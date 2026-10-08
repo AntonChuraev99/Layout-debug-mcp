@@ -1,6 +1,22 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveServerBase, unreachableMessage } from './connection.ts'
+import { resolveServerBase, resolveWaitSeconds, unreachableMessage } from './connection.ts'
+
+test('resolveWaitSeconds: default 40, LD_WAIT_SECONDS 5..50, anything else warns and keeps 40', () => {
+  assert.deepEqual(resolveWaitSeconds({}), { seconds: 40 })
+  assert.deepEqual(resolveWaitSeconds({ LD_WAIT_SECONDS: ' ' }), { seconds: 40 })
+  assert.deepEqual(resolveWaitSeconds({ LD_WAIT_SECONDS: '5' }), { seconds: 5 })
+  assert.deepEqual(resolveWaitSeconds({ LD_WAIT_SECONDS: '50' }), { seconds: 50 })
+  for (const bad of ['4', '51', '10.5', 'soon']) {
+    const r = resolveWaitSeconds({ LD_WAIT_SECONDS: bad })
+    assert.equal(r.seconds, 40, bad)
+    assert.match(r.warning ?? '', new RegExp(`LD_WAIT_SECONDS="${bad}"`))
+  }
+})
+
+test('unreachableMessage: names open_window as the way to start the server', () => {
+  assert.match(unreachableMessage('http://127.0.0.1:5175', 'fetch failed', {}), /call open_window/)
+})
 
 test('resolveServerBase: port when LD_SERVER_URL is unset or blank', () => {
   assert.equal(resolveServerBase({}, 5185), 'http://127.0.0.1:5185')
