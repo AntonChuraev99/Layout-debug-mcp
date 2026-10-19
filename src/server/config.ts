@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { parsePort, SERVER_PORT } from '../shared/ports.ts'
 import type { TargetKind } from '../shared/protocol.ts'
+import { isAndroidPackage } from './androidApp.ts'
 
 export interface Config {
   /** Which adapter drives the frame. */
@@ -18,6 +19,11 @@ export interface Config {
   androidPort: number
   /** Android target: `adb -s <serial>`. Null lets adb pick when exactly one device is attached. */
   device: string | null
+  /**
+   * Android target: the application id the on-device agent must belong to. Null
+   * checks nothing (the agent on the port is taken as is).
+   */
+  androidPackage: string | null
   /** The config file that was read, or null when there is none. */
   configFile: string | null
   /** Exit after this long with no window and no waiting agent; 0 keeps running. */
@@ -48,6 +54,7 @@ interface FileConfig {
   projectDir?: unknown
   androidPort?: unknown
   device?: unknown
+  androidPackage?: unknown
 }
 
 /**
@@ -88,6 +95,15 @@ export function loadConfig(cwd: string = process.cwd(), env: Env = process.env):
     throw new ConfigError((err as Error).message.replace(/^\[layout-debug\] /, ''))
   }
 
+  const envPackage = value(env.LD_ANDROID_PACKAGE)
+  const androidPackage = envPackage ?? optionalString(file.data.androidPackage, from('androidPackage')) ?? null
+  if (androidPackage !== null && !isAndroidPackage(androidPackage)) {
+    const source = envPackage ? 'LD_ANDROID_PACKAGE' : from('androidPackage')
+    throw new ConfigError(
+      `${source} is ${JSON.stringify(androidPackage)}; expected an Android application id like "com.example.app"`,
+    )
+  }
+
   return {
     target,
     targetUrl:
@@ -97,6 +113,7 @@ export function loadConfig(cwd: string = process.cwd(), env: Env = process.env):
     projectDir,
     androidPort,
     device: value(env.LD_DEVICE) ?? optionalString(file.data.device, from('device')) ?? null,
+    androidPackage,
     configFile: file.found ? path : null,
     idleExitMs: parseIdleMinutes(env.LD_IDLE_EXIT_MINUTES) * 60_000,
   }

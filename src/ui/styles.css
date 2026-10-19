@@ -898,6 +898,29 @@ kbd {
   flex: 1;
   min-width: 0;
 }
+.inbox__chat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg-2);
+}
+.inbox__chat-text {
+  flex: 1;
+  min-width: 0;
+}
+.inbox__chat .link-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.inbox__chat-error {
+  flex-basis: 100%;
+  color: var(--danger-fg);
+}
 .inbox__scroll {
   overflow: auto;
   padding: 6px 6px 8px;
@@ -1108,7 +1131,10 @@ kbd {
   position: relative;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  /* clip, not hidden: `hidden` still lets the browser scroll the canvas to bring a focused
+     card element into view, and the frame, the overlay and the card all slide with it. Every
+     position in here is computed by the window; nothing may scroll it. */
+  overflow: clip;
   background: var(--surface-0);
   outline-offset: -2px;
 }
@@ -1649,6 +1675,14 @@ kbd {
     transform: translateY(4px) scale(0.98);
   }
 }
+/*
+ * Standing aside while the user drags its element: hidden but mounted, so the chat keeps its
+ * scroll and unsent text. No animation while aside, so the entrance plays again when it is back.
+ */
+.float__card.float__card--aside {
+  visibility: hidden;
+  animation: none;
+}
 
 .palette,
 .chat {
@@ -1686,6 +1720,10 @@ kbd {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Last resort when the side's room is shorter than even the head and the field (App.tsx
+     floatPos.maxH): the body scrolls instead of spilling out of the card. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   animation: fade 80ms linear;
 }
 @keyframes fade {
@@ -1948,18 +1986,26 @@ kbd {
   grid-template-rows: 0fr;
   transition: grid-template-rows 180ms var(--ease-std);
   min-height: 0;
+  /* The palette is capped to the room on its side: Details give way first (their list
+     scrolls), the rows only after them. */
+  flex-shrink: 1000;
 }
 .palette__details.is-open {
   grid-template-rows: 1fr;
   border-top: 1px solid var(--line);
 }
+/* clip, not hidden: a focused child must not scroll this box (it would slide Details up under
+   the rows); `.details` is the list that scrolls. */
 .palette__details-inner {
-  overflow: hidden;
+  overflow: clip;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .details {
   padding: 10px 12px 12px;
   max-height: 280px;
+  min-height: 0;
   overflow: auto;
 }
 .facts {
@@ -2396,6 +2442,9 @@ dd.facts__wide {
   /* Out, not in: the rule above would fade the closing copy back in. */
   .float__card.float__card--leaving {
     animation-name: float-out-fade !important;
+  }
+  .float__card.float__card--aside {
+    animation-name: none !important;
   }
   .mark--work,
   .mark--refresh {

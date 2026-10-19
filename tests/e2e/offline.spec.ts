@@ -66,7 +66,7 @@ test('14 server down → red pill with the fix; it clears once the server is bac
   await waitUntil(UI, true)
 
   await page.goto(UI)
-  await expect(frameOf(page).getByRole('heading', { name: 'Годовая подписка' })).toBeVisible({ timeout: 20_000 })
+  await expect(frameOf(page).getByRole('heading', { name: 'Annual plan' })).toBeVisible({ timeout: 20_000 })
   const pill = page.getByRole('button', { name: 'Server not responding' })
   await expect(pill).toHaveCount(0)
 

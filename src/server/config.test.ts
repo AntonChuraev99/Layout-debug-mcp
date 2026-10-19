@@ -106,6 +106,19 @@ describe('loadConfig: invalid values fail at start with the source named', () =>
     fails(() => loadConfig(dir('missing'), { LD_CONFIG: 'nope.json' }), /LD_CONFIG points at .*nope\.json, which does not exist/)
   })
 
+  test('androidPackage: unset is null, env overrides the file, a non-application id fails', () => {
+    assert.equal(loadConfig(dir('pkg-none'), {}).androidPackage, null)
+    assert.equal(loadConfig(dir('pkg-file', { androidPackage: 'com.example.app' }), {}).androidPackage, 'com.example.app')
+    assert.equal(
+      loadConfig(dir('pkg-env', { androidPackage: 'com.example.app' }), { LD_ANDROID_PACKAGE: ' com.example.other ' })
+        .androidPackage,
+      'com.example.other',
+    )
+    fails(() => loadConfig(dir('pkg-bad-env'), { LD_ANDROID_PACKAGE: 'com.x;reboot' }), /LD_ANDROID_PACKAGE is "com\.x;reboot"; expected an Android application id/)
+    fails(() => loadConfig(dir('pkg-bad-file', { androidPackage: 'app' }), {}), /"androidPackage" in .* is "app"; expected an Android application id/)
+    fails(() => loadConfig(dir('pkg-type', { androidPackage: 7 }), {}), /"androidPackage" in .* is 7; expected a string/)
+  })
+
   test('LD_IDLE_EXIT_MINUTES', () => {
     assert.equal(parseIdleMinutes(undefined), 0)
     assert.equal(parseIdleMinutes(' 30 '), 30)

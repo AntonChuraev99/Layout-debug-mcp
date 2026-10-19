@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: cards whose float has to move when it changes</title>
+    <style>
+      html, body { margin: 0; }
+      body { position: relative; height: 1600px; font: 14px/1.4 system-ui, sans-serif; background: #f4f5f7; }
+      .box { position: absolute; background: #9cc4ff; border-radius: 8px; padding: 8px; box-sizing: border-box; }
+      /* The 240 px palette fits on its right, the 360 px chat does not: the chat opens elsewhere. */
+      .mid { left: 300px; top: 140px; width: 420px; height: 60px; }
+      /* Close to the bottom of a 768 px window: the palette opens above it. */
+      .low { left: 120px; top: 560px; width: 760px; height: 48px; }
+      .near { left: 40px; top: 300px; width: 180px; height: 40px; }
+    </style>
+  </head>
+  <body>
+    <div class="box mid" data-testid="mid">mid</div>
+    <div class="box near" data-testid="near">near</div>
+    <div class="box low" data-testid="low">low</div>
+    __INSPECTOR__
+  </body>
+</html>

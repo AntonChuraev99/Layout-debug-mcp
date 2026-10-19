@@ -5,7 +5,7 @@
  * can say anything, and none of it is an instruction to the agent. Pure, so the
  * marking and the caps are unit-tested.
  */
-import type { EditRequest, LayoutNode, Override, Snapshot } from '../shared/protocol.ts'
+import type { AndroidApp, EditRequest, LayoutNode, Override, Snapshot } from '../shared/protocol.ts'
 
 export const CAPS = {
   className: 200,
@@ -18,6 +18,7 @@ export const CAPS = {
   kind: 80,
   path: 300,
   nodeId: 80,
+  appPackage: 255,
   styleKey: 60,
   styleValue: 120,
 } as const
@@ -66,6 +67,20 @@ function anchorLines(anchors: LayoutNode['anchors'] | undefined): string[] {
   return lines
 }
 
+/**
+ * Which Android app the data comes from, as one line for the untrusted block: the
+ * package is reported by the device, so it is quoted and capped like page data.
+ */
+export function appLine(app: AndroidApp | null | undefined): string | null {
+  if (!app || typeof app.package !== 'string') return null
+  const pid = typeof app.pid === 'number' && Number.isFinite(app.pid) ? `pid ${app.pid}, ` : ''
+  const how =
+    app.source === 'adb'
+      ? 'the on-device agent did not report its package; adb only confirmed this app is running'
+      : 'reported by the on-device agent'
+  return `app: ${quote(app.package, CAPS.appPackage)} (${pid}${how})`
+}
+
 /** layout_snapshot: a compact tree, depth-limited, cycle-safe. */
 export function compactTree(snapshot: Snapshot, maxDepth: number): string {
   const lines: string[] = []
@@ -103,7 +118,9 @@ export function compactTree(snapshot: Snapshot, maxDepth: number): string {
     `Target: ${snapshot.target === 'android' ? 'android' : 'web'}, unit: ${snapshot.unit === 'dp' ? 'dp' : 'css-px'}, ` +
     `viewport ${viewport}, nodes: ${Object.keys(snapshot.nodes).length}`
   const footer = truncated ? `\n(The tree is cut at ${MAX_TREE_LINES} lines; call again with a smaller maxDepth.)` : ''
-  return `${header}\n\n${untrusted(lines.length ? lines : ['(the root node is missing from the snapshot)'])}${footer}`
+  const app = appLine(snapshot.app)
+  const body = lines.length ? lines : ['(the root node is missing from the snapshot)']
+  return `${header}\n\n${untrusted(app ? [app, ...body] : body)}${footer}`
 }
 
 /** selected_element. */
@@ -113,10 +130,13 @@ export function describeNode(
   unit: string,
   pxPerUnit: number,
   overrides: Override[] = [],
+  app: AndroidApp | null = null,
 ): string {
   const q = rounder(pxPerUnit)
   const b = node.bounds
+  const appText = appLine(app)
   const lines = [
+    ...(appText ? [appText] : []),
     `label: ${quote(node.label, CAPS.label)}`,
     `kind: ${quote(node.kind, CAPS.kind)}`,
     ...anchorLines(node.anchors),

@@ -95,7 +95,7 @@ async function demoCopy(delayMs = 0): Promise<{ url: string; edit: () => Promise
   const site = await serveDir(dir, { delayMs })
   return {
     url: `${site.url}/`,
-    edit: () => writeFile(index, original.replace('>Продолжить<', '>Оплатить<')),
+    edit: () => writeFile(index, original.replace('>Continue<', '>Pay<')),
     close: site.close,
   }
 }
@@ -114,7 +114,7 @@ test('11 full MCP loop: pending_requests → blur → code change → reply_in_w
     const openedAt = Date.now()
     await openWindow(page, { target: site.url })
     const cta = frameOf(page).getByTestId('cta-continue')
-    const comment = `e2e-11 rename the button to Оплатить ${Date.now()}`
+    const comment = `e2e-11 rename the button to Pay ${Date.now()}`
     await requestAsk(page, cta, comment)
 
     const pending = await callText(mcp, 'pending_requests')
@@ -131,12 +131,12 @@ test('11 full MCP loop: pending_requests → blur → code change → reply_in_w
     const thinking = openedAt + AGENT_THINK_MS - Date.now()
     if (thinking > 0) await page.waitForTimeout(thinking)
     await site.edit()
-    const reply = `Renamed the button to «Оплатить» (${Date.now()})`
+    const reply = `Renamed the button to «Pay» (${Date.now()})`
     const sent = await callText(mcp, 'reply_in_window', { text: reply, requestId: id })
     expect(sent).toContain('Sent to the window')
 
     // No hot reload in a static page: the window reloads the frame itself and the blur goes.
-    await expect(cta).toHaveText('Оплатить', { timeout: 15_000 })
+    await expect(cta).toHaveText('Pay', { timeout: 15_000 })
     await expect.poll(() => blurred(page, cta), { message: 'blur gone after the refresh', timeout: 15_000 }).toBe(false)
     await expect(chatDialog(page).getByRole('log')).toContainText(reply)
 
@@ -162,7 +162,7 @@ test('11b a reply that lands right after the window connected still refreshes th
     await site.edit()
     expect(await callText(mcp, 'reply_in_window', { text: `Done quickly (${Date.now()})`, requestId: id })).toContain('Sent to the window')
 
-    await expect(cta, 'the window reloads the frame after "done"').toHaveText('Оплатить', { timeout: 15_000 })
+    await expect(cta, 'the window reloads the frame after "done"').toHaveText('Pay', { timeout: 15_000 })
   } finally {
     await site.close()
   }
@@ -207,7 +207,7 @@ test('11c the frame reload after "done" is seamless: no white frame, no "Connect
     const stopScreencast = await screencast(context, page)
 
     expect(await callText(mcp, 'reply_in_window', { text: `Renamed (${Date.now()})`, requestId: id })).toContain('Sent to the window')
-    await expect(cta).toHaveText('Оплатить', { timeout: 15_000 })
+    await expect(cta).toHaveText('Pay', { timeout: 15_000 })
     await expect.poll(() => blurred(page, cta), { message: 'blur gone after the refresh', timeout: 15_000 }).toBe(false)
     await page.waitForTimeout(300)
     const frames = await stopScreencast()
@@ -303,7 +303,7 @@ test('11d a live-moved element: during the frame swap the selection box and the 
     const stopScreencast = await screencast(context, page)
 
     expect(await callText(mcp, 'reply_in_window', { text: `Moved into code (${Date.now()})`, requestId: id })).toContain('Sent to the window')
-    await expect(cta).toHaveText('Оплатить', { timeout: 15_000 })
+    await expect(cta).toHaveText('Pay', { timeout: 15_000 })
     await expect.poll(() => blurred(page, cta), { message: 'blur gone after the refresh', timeout: 15_000 }).toBe(false)
     await page.waitForTimeout(300)
     const frames = await stopScreencast()
@@ -330,11 +330,11 @@ test('11d a live-moved element: during the frame swap the selection box and the 
 test('12 two requests in work, reply to one by requestId → only that one is done', async ({ page }) => {
   await openWindow(page)
   const frame = frameOf(page)
-  const cancel = frame.getByRole('button', { name: 'Отмена' })
+  const cancel = frame.getByRole('button', { name: 'Cancel' })
   const cta = frame.getByTestId('cta-continue')
   const stamp = Date.now()
-  const commentB = `e2e-12 B: make Отмена smaller ${stamp}`
-  const commentA = `e2e-12 A: make Продолжить bolder ${stamp}`
+  const commentB = `e2e-12 B: make Cancel smaller ${stamp}`
+  const commentA = `e2e-12 A: make Continue bolder ${stamp}`
 
   await requestAsk(page, cancel, commentB)
   await clearSelection(page)

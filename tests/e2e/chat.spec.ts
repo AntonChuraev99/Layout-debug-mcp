@@ -113,8 +113,8 @@ test('10c the palette field draft belongs to its element', async ({ page }) => {
   await selectInFrame(page, frameOf(page).getByTestId('cta-continue'))
   await paletteField(page).fill('only for the button')
   // The palette sits next to the button and may cover its neighbour: pick the title instead.
-  await selectInFrame(page, frameOf(page).getByRole('heading', { name: 'Годовая подписка' }))
-  await expect(palette(page)).toHaveAccessibleName(/Годовая подписка/)
+  await selectInFrame(page, frameOf(page).getByRole('heading', { name: 'Annual plan' }))
+  await expect(palette(page)).toHaveAccessibleName(/Annual plan/)
   await expect(paletteField(page)).toHaveValue('')
 })
 

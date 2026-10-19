@@ -21,6 +21,24 @@ const en = {
   clearOverridesError: 'Resetting edits: {reason}',
   deviceAgentError: 'agent on the device: {reason}',
   deviceScreenshotError: 'screenshot: HTTP {status}',
+  deviceUnresponsive:
+    'adb lists {serial}, but the device does not answer over adb (adb shell timed out). The app is not at fault, ' +
+    'so restarting it will not help: the adb connection has stalled. Reconnect it: turn Wireless debugging off and ' +
+    'on in Developer options, or run adb disconnect {serial} and then adb connect <ip:port> (or pair again), or ' +
+    'replug the USB cable. The window picks the device up by itself once it answers.',
+  deviceAgentHttp:
+    'the agent on the device answered {path} with HTTP {status}{reason}. Restart the debug build of the app; if it ' +
+    'repeats, the on-device agent and layout-debug-mcp may be from different versions.',
+  deviceAgentBadReply:
+    'the agent on the device sent a reply to {path} that is not JSON ({reason}). Restart the debug build of the app; ' +
+    'if it repeats, the on-device agent and layout-debug-mcp may be from different versions.',
+  deviceWrongApp:
+    'the agent on port {port} belongs to {actual}, not to {expected} (LD_ANDROID_PACKAGE). Close {actual} and start ' +
+    '{expected} in a debug build, or fix LD_ANDROID_PACKAGE / "androidPackage" in layout-debug.config.json.',
+  deviceAppNotRunning:
+    '{expected} (LD_ANDROID_PACKAGE) is not running on the device, and the agent on port {port} did not report ' +
+    'which app it belongs to. Start {expected} in a debug build, or fix LD_ANDROID_PACKAGE / "androidPackage" in ' +
+    'layout-debug.config.json.',
 } as const
 
 export type MessageKey = keyof typeof en
@@ -38,6 +56,23 @@ const ru: Record<MessageKey, string> = {
   clearOverridesError: 'Сброс правок: {reason}',
   deviceAgentError: 'агент на устройстве: {reason}',
   deviceScreenshotError: 'скриншот: HTTP {status}',
+  deviceUnresponsive:
+    'adb видит {serial}, но устройство не отвечает по adb (adb shell не ответил вовремя). Приложение ни при чём, ' +
+    'его перезапуск не поможет: зависло само adb-соединение. Переподключи его: выключи и включи «Отладку по Wi-Fi» ' +
+    'в параметрах разработчика, или выполни adb disconnect {serial}, а затем adb connect <ip:порт> (или заново ' +
+    'pair), или переподключи USB-кабель. Окно само подхватит устройство, как только оно ответит.',
+  deviceAgentHttp:
+    'агент на устройстве ответил на {path} кодом HTTP {status}{reason}. Перезапусти debug-сборку приложения; если ' +
+    'повторится — агент на устройстве и layout-debug-mcp, возможно, разных версий.',
+  deviceAgentBadReply:
+    'агент на устройстве прислал на {path} ответ не в JSON ({reason}). Перезапусти debug-сборку приложения; если ' +
+    'повторится — агент на устройстве и layout-debug-mcp, возможно, разных версий.',
+  deviceWrongApp:
+    'агент на порту {port} принадлежит {actual}, а не {expected} (LD_ANDROID_PACKAGE). Закрой {actual} и запусти ' +
+    '{expected} в debug-сборке или исправь LD_ANDROID_PACKAGE / "androidPackage" в layout-debug.config.json.',
+  deviceAppNotRunning:
+    '{expected} (LD_ANDROID_PACKAGE) не запущено на устройстве, а агент на порту {port} не сообщил, чьё он. ' +
+    'Запусти {expected} в debug-сборке или исправь LD_ANDROID_PACKAGE / "androidPackage" в layout-debug.config.json.',
 }
 
 const DICTIONARIES: Record<Locale, Record<MessageKey, string>> = { en, ru }

@@ -291,7 +291,7 @@ Appears next to the selected element, with breadcrumbs of its parents on top:
 
 <img src="./.github/media/inbox-progress.png" width="70%" alt="Inbox with a request in the Agent editing state">
 
-The Inbox icon in the header shows a counter of open requests. Inside: every request with its status (Queued, Agent editing, Done, Error) and time, replies that aren't tied to an element, and errors with the next step. Filter by Active or All.
+The Inbox icon in the header shows a counter of open requests. Inside: every request with its status (Queued, Agent editing, Done, Error) and time, replies that aren't tied to an element, and errors with the next step. Filter by Active or All. **Clear chat** empties the chat history for every open window; requests stay.
 
 ### Language
 
@@ -319,7 +319,7 @@ For source mapping add a build step that writes `data-source-loc="file:line"` on
 
 ## Android
 
-The on-device agent is a small debug-only component: it walks the real Compose tree via `ui-tooling` (`asTree()` gives boxes and compiler source info), serves it with a `PixelCopy` screenshot over HTTP, and applies live overrides by swapping the `LayoutNode` modifier on the running composition. The tool reaches it through `adb forward`, which it sets up and re-establishes by itself. Screenshot and tree come from one call, so they always match.
+The on-device agent is a small debug-only component: it walks the real Compose tree via `ui-tooling` (`asTree()` gives boxes and compiler source info), serves it with a `PixelCopy` screenshot over HTTP, and applies live overrides by swapping the `LayoutNode` modifier on the running composition. The tool reaches it through `adb forward`, which it sets up and re-establishes by itself. Each capture asks for the tree and the screenshot at the same time and keeps that screenshot with the tree, so they match; several open windows share one capture.
 
 > **Status:** the agent works in a spike app and is **not yet packaged as a library**. Publishing it to Maven Central as a one-line `debugImplementation` is the next Android milestone. Until then Android mode is for early testers.
 
@@ -330,6 +330,10 @@ Switch the tool to Android mode with `{ "target": "android" }` in `layout-debug.
 ```
 
 `LD_DEVICE` is needed only when more than one device is attached. The app must be running in a debug build.
+
+Several debug apps with the agent on one device? Set `LD_ANDROID_PACKAGE` (or `"androidPackage"` in the config file) to the application id you are debugging, e.g. `com.example.app`. The tool then checks who answers on the agent port and shows an error naming both apps when it is another one, instead of showing that app's screen.
+
+The tool reads two optional fields from the agent's `GET /health`, next to `ok` and `port`: `package` (the application id) and `pid` (the app process id), e.g. `{"ok":true,"port":8790,"package":"com.example.app","pid":12345}`. `/tree` may carry the same two fields. With them, the window and the MCP tools say which app the data comes from. An agent without them still works: with `LD_ANDROID_PACKAGE` set the tool falls back to `adb shell pidof <package>`, which only confirms the app is running, and says so.
 
 In Android mode the window shows the device frame instead of an iframe, with the same overlay, selection, drag and reset. The frame refreshes on its own (paused while you drag, backing off when captures fail), and the header chip shows the device model. The first snapshot of a session resets the device's live overrides, so stale ones from a previous window don't linger.
 
@@ -344,6 +348,7 @@ Environment variables (set them in the MCP client's `env`) override `layout-debu
 | `LD_PROJECT_DIR` | `projectDir` | start folder | Your project; file paths in the window are shown relative to it |
 | `LD_DEVICE` | `device` | none | `adb -s` serial (android) |
 | `LD_ANDROID_PORT` | `androidPort` | `8790` | On-device agent port (android) |
+| `LD_ANDROID_PACKAGE` | `androidPackage` | none | Application id the on-device agent must belong to, e.g. `com.example.app` (android) |
 | `LD_SERVER_PORT` | none | `5175` | Port of the server and the window |
 | `LD_SERVER_URL` | none | `http://127.0.0.1:5175` | Where the MCP process finds the server (overrides `LD_SERVER_PORT` there) |
 | `LD_WAIT_SECONDS` | none | `40` | How long `wait_for_message` waits before "no message yet" (5–50) |
@@ -433,6 +438,8 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 | Window says the inspector didn't respond | The script tag is in the page, the target allows framing (`X-Frame-Options`, CSP `frame-ancestors`), CSP `script-src` allows `127.0.0.1:5175` |
 | Android: "adb not found" / "No device connected" | `adb devices` lists exactly one device with status `device` (or set `LD_DEVICE`); the window picks it up without a reload |
 | Android: "The device is there, but the app is silent" | The app runs as a debug build with the agent, listening on `LD_ANDROID_PORT` (8790) |
+| Android: "the agent on port … belongs to …, not to …" | Another debug app holds the agent port. Close it and start yours, or fix `LD_ANDROID_PACKAGE` |
+| Android: "adb lists …, but the device does not answer over adb" | The adb link has stalled (common with wireless debugging); restarting the app won't help. Turn Wireless debugging off and on, or `adb disconnect <serial>` then `adb connect <ip:port>`, or replug USB. The window picks the device up by itself |
 
 ## Roadmap
 

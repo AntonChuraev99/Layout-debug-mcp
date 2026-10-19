@@ -145,7 +145,7 @@ test('2 with Alt, hover highlights the element under the cursor, Alt+click selec
   await expect(hoverBox(page)).toContainText('button')
 
   // The highlight follows the cursor to the next element.
-  const title = await centerOf(frame.getByRole('heading', { name: 'Годовая подписка' }))
+  const title = await centerOf(frame.getByRole('heading', { name: 'Annual plan' }))
   await page.mouse.move(title.x, title.y)
   await expect(async () => expectSameBox(await hoverBox(page).boundingBox(), title.box)).toPass({ timeout: 3_000 })
   await expect(hoverBox(page)).toContainText('h1')
@@ -198,7 +198,7 @@ test('3b with a layer selected, a plain click elsewhere goes to the page and kee
   await openWindow(page)
   const frame = frameOf(page)
   // The second card's title: its palette opens to the right, clear of the CTA.
-  await selectInFrame(page, frame.getByRole('heading', { name: 'Вторая карточка' }))
+  await selectInFrame(page, frame.getByRole('heading', { name: 'Second card' }))
   const before = await selectedBox(page).boundingBox()
 
   const cta = frame.getByTestId('cta-continue')
@@ -267,11 +267,11 @@ test('3d2 Alt pressed with the cursor resting on the page highlights at once, wi
 test('3d3 Alt over a selected layer leaves it an outline only; past the root the hover says Top layer', async ({ page }) => {
   await openWindow(page)
   const frame = frameOf(page)
-  await selectInFrame(page, frame.getByRole('heading', { name: 'Вторая карточка' }))
+  await selectInFrame(page, frame.getByRole('heading', { name: 'Second card' }))
   await expect(page.locator('.chip--selected')).toBeVisible()
 
   // Alt over the selection itself: one label (the hover's), the selection keeps only its outline.
-  const h = await centerOf(frame.getByRole('heading', { name: 'Вторая карточка' }))
+  const h = await centerOf(frame.getByRole('heading', { name: 'Second card' }))
   await page.keyboard.down('Alt')
   await page.mouse.move(h.x, h.y)
   await expect(page.locator('.chip--selected')).toHaveCount(0)

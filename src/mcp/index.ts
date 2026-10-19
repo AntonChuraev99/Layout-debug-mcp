@@ -13,6 +13,7 @@ import { z } from 'zod'
 import { PACKAGE_NAME, PACKAGE_VERSION } from '../shared/paths.ts'
 import { SERVER_PORT } from '../shared/ports.ts'
 import type {
+  AndroidApp,
   ApiErrorBody,
   ConsumeRequestsBody,
   ConsumeRequestsResponse,
@@ -298,6 +299,8 @@ server.registerTool(
         overrides: EditRequest['overrides']
         unit: string | null
         pxPerUnit: number | null
+        /** Absent from a server older than the app identity. */
+        app?: AndroidApp | null
       }>('/api/selected')
       if (!data.node) {
         return done(
@@ -306,7 +309,14 @@ server.registerTool(
           reply('Nothing is selected. Ask the user to select an element in the layout-debug window.', 'empty'),
         )
       }
-      const body = describeNode(data.node, data.ancestors ?? [], data.unit ?? 'css-px', data.pxPerUnit ?? 1, data.overrides ?? [])
+      const body = describeNode(
+        data.node,
+        data.ancestors ?? [],
+        data.unit ?? 'css-px',
+        data.pxPerUnit ?? 1,
+        data.overrides ?? [],
+        data.app ?? null,
+      )
       return done('selected_element', startedAt, reply(body, 'ok'))
     } catch (err) {
       return done('selected_element', startedAt, fail(err))

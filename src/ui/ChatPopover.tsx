@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChatMessage, EditRequest } from '../shared/protocol.ts'
 import { useT } from './i18n.ts'
 import { describeOverride } from './NodeDetails.tsx'
@@ -41,7 +41,7 @@ interface Props {
 
 const MAX_TEXTAREA = 120
 
-export function ChatPopover(props: Props) {
+export const ChatPopover = memo(function ChatPopover(props: Props) {
   const { t, rich, quotes } = useT()
   const [text, setText] = useState('')
   const [hint, setHint] = useState<string | null>(null)
@@ -51,7 +51,9 @@ export function ChatPopover(props: Props) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
-    areaRef.current?.focus()
+    // The card may still stand where the palette was (it is placed after it measured itself):
+    // taking the focus must not scroll anything to reach it.
+    areaRef.current?.focus({ preventScroll: true })
     return () => window.clearTimeout(hintTimer.current)
   }, [])
 
@@ -209,7 +211,7 @@ export function ChatPopover(props: Props) {
       </div>
     </div>
   )
-}
+})
 
 interface MessageProps {
   m: ChatMessage

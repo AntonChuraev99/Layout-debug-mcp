@@ -8,6 +8,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 ### Added
 
 - Anonymous usage telemetry (tool outcomes, error codes, funnel steps, OS and MCP client name; never content, paths or messages). On by default, off in CI. Turn it off with `LD_TELEMETRY=0`, `DO_NOT_TRACK=1` or `npx layout-debug-mcp telemetry off`; `LD_TELEMETRY_DEBUG=1` prints events instead of sending. The first run says so in the log and in the window. See [Telemetry](./README.md#telemetry).
+- Inbox: **Clear chat** empties the chat history on the server for every open window (requests stay). Also `DELETE /api/chat`.
+- Android: `LD_ANDROID_PACKAGE` (or `androidPackage` in the config file) names the app the on-device agent must belong to; another app on the agent port, or the app not running, is a visible error naming both. When the agent reports `package`/`pid` in `/health`, the window and `layout_snapshot`/`selected_element` show which app the data comes from.
+
+### Changed
+
+- The bundled demo page is in English.
+
+### Fixed
+
+- The action palette keeps the side it opened on when Details makes it taller, and scrolls inside when its side is short, instead of jumping to another side of the element.
+- The chat keeps the scroll position you set, the text you typed and the focus when the page re-renders the element or the device frame refreshes; it scrolls down by itself only when you are already at the bottom.
+- Focus moving through the palette or into the chat no longer scrolls the frame, so the view stays put when you select elements.
+- Dragging an element with the chat open keeps the chat (its text and scroll); it steps aside during the drag and comes back next to the new place.
+- After an agent's edit, the old page stays on screen until the reloaded page has painted, so no blank frame flashes.
+- Android: fewer window re-renders per device frame (about 2 instead of 4–5), and the selection follows its element across recaptures.
+- Android: faster device refresh. The tree and the screenshot are fetched at the same time and the screenshot is kept with its tree, so the window gets the picture from memory and both show the same moment; windows open at the same time share one device capture instead of each starting its own.
+- Android: a hung on-device agent is reported within about 6 seconds instead of after 30, and the window's device chip no longer delays the window's start by up to 3 seconds when adb cannot answer.
+- Android: a stalled adb link (the device is listed but `adb shell` does not answer, common with wireless debugging) is shown as such, with how to reconnect, instead of "start the app as a debug build". New error code `device_unresponsive`.
+- Android: an error answer or a non-JSON body from the on-device agent is shown with the status code and what to do, instead of a JSON parse error.
+- Windows: no more console window flashing on every adb call. adb runs hidden, and while the device agent stays unreachable `adb forward` is re-armed at most once every 5 seconds instead of on every refresh.
 
 ## [0.2.0] - 2026-10-08
 

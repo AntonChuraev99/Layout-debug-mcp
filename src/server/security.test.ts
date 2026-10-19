@@ -14,7 +14,7 @@ import {
 
 const ok = (v: Verdict) => assert.deepEqual(v, { ok: true })
 const denied = (v: Verdict, pattern?: RegExp) => {
-  assert.equal(v.ok, false, 'ожидался отказ')
+  assert.equal(v.ok, false, 'expected a denial')
   if (pattern && !v.ok) assert.match(v.reason, pattern)
 }
 
@@ -22,61 +22,61 @@ const serverHost = `127.0.0.1:${SERVER_PORT}`
 const uiOrigin = `http://localhost:${UI_PORT}`
 
 describe('WebSocket upgrade', () => {
-  test('окно через Vite-прокси (Host сохраняется, Origin UI) пропускается', () => {
+  test('the window through the Vite proxy (Host kept, UI Origin) is let in', () => {
     ok(checkWsUpgrade({ host: `localhost:${UI_PORT}`, origin: uiOrigin }))
     ok(checkWsUpgrade({ host: `127.0.0.1:${UI_PORT}`, origin: `http://127.0.0.1:${UI_PORT}` }))
   })
-  test('прямое подключение из окна пропускается', () => {
+  test('a direct connection from the window is let in', () => {
     ok(checkWsUpgrade({ host: `localhost:${SERVER_PORT}`, origin: uiOrigin }))
   })
-  test('чужой origin отклоняется', () => {
+  test('a foreign origin is denied', () => {
     denied(checkWsUpgrade({ host: serverHost, origin: 'https://evil.example' }), /Origin/)
   })
-  test('origin другого локального порта отклоняется', () => {
+  test('an origin on another local port is denied', () => {
     denied(checkWsUpgrade({ host: serverHost, origin: 'http://localhost:3000' }), /Origin/)
   })
-  test('origin "null" (sandbox iframe, file://) отклоняется', () => {
+  test('origin "null" (sandbox iframe, file://) is denied', () => {
     denied(checkWsUpgrade({ host: serverHost, origin: 'null' }), /Origin/)
   })
-  test('rebinding-Host отклоняется даже с разрешённым origin', () => {
+  test('a rebinding Host is denied even with an allowed origin', () => {
     denied(checkWsUpgrade({ host: `evil.com:${SERVER_PORT}`, origin: uiOrigin }), /Host/)
   })
-  test('без Host отклоняется', () => {
+  test('no Host is denied', () => {
     denied(checkWsUpgrade({ origin: uiOrigin }), /Host/)
   })
 })
 
 describe('HTTP /api', () => {
-  test('без Origin с loopback-Host (MCP, curl) пропускается', () => {
+  test('no Origin with a loopback Host (MCP, curl) is let in', () => {
     ok(checkApiRequest({ host: serverHost }))
     ok(checkApiRequest({ host: `localhost:${SERVER_PORT}` }))
   })
-  test('окно через Vite-прокси (changeOrigin: Host сервера) пропускается', () => {
+  test('the window through the Vite proxy (changeOrigin: server Host) is let in', () => {
     ok(checkApiRequest({ host: serverHost, 'sec-fetch-site': 'same-origin' }))
     ok(checkApiRequest({ host: serverHost, origin: uiOrigin, 'sec-fetch-site': 'same-origin' }))
   })
-  test('чужой origin отклоняется (POST text/plain без preflight)', () => {
+  test('a foreign origin is denied (POST text/plain without preflight)', () => {
     denied(checkApiRequest({ host: serverHost, origin: 'https://evil.example' }), /Origin/)
   })
-  test('origin "null" отклоняется', () => {
+  test('origin "null" is denied', () => {
     denied(checkApiRequest({ host: serverHost, origin: 'null' }), /Origin/)
   })
-  test('rebinding-Host отклоняется', () => {
+  test('a rebinding Host is denied', () => {
     denied(checkApiRequest({ host: `evil.com:${SERVER_PORT}` }), /Host/)
     denied(checkApiRequest({ host: 'evil.example' }), /Host/)
   })
-  test('межсайтовый GET без Origin (<img src>) отклоняется по Sec-Fetch-Site', () => {
+  test('a cross-site GET without Origin (<img src>) is denied by Sec-Fetch-Site', () => {
     denied(checkApiRequest({ host: serverHost, 'sec-fetch-site': 'cross-site' }), /Sec-Fetch-Site/)
     denied(checkApiRequest({ host: serverHost, 'sec-fetch-site': 'same-site' }), /Sec-Fetch-Site/)
   })
 })
 
-describe('статика (inspector.js, demo)', () => {
-  test('грузится с любой страницы', () => {
+describe('static files (inspector.js, demo)', () => {
+  test('load from any page', () => {
     ok(checkStaticRequest({ host: `localhost:${SERVER_PORT}`, 'sec-fetch-site': 'cross-site' }))
     ok(checkStaticRequest({ host: serverHost, origin: 'http://localhost:3000' }))
   })
-  test('rebinding-Host отклоняется', () => {
+  test('a rebinding Host is denied', () => {
     denied(checkStaticRequest({ host: `evil.com:${SERVER_PORT}` }), /Host/)
   })
 })

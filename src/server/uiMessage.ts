@@ -68,6 +68,9 @@ function snapshotProblem(v: unknown): string | null {
       return 'snapshot.viewport is not {w, h} numbers'
     }
   }
+  if (v.app != null && (!isObject(v.app) || typeof v.app.package !== 'string')) {
+    return 'snapshot.app is not {package: string}'
+  }
   const entries = Object.entries(v.nodes)
   if (entries.length > MAX_SNAPSHOT_NODES) return `snapshot has ${entries.length} nodes, more than ${MAX_SNAPSHOT_NODES}`
   for (const [key, node] of entries) {
@@ -122,6 +125,7 @@ export function parseUiMessage(raw: string): ParsedUiMessage {
       return p ? bad(p) : { ok: true, msg: data as UiToServer }
     }
     case 'clearRequests':
+    case 'clearChat':
     case 'telemetryNoticeDismissed':
     case 'androidCapture':
     case 'androidClearOverrides':

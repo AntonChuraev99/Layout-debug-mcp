@@ -76,6 +76,19 @@ export interface Snapshot {
   viewport: { w: number; h: number }
   rootId: NodeId
   nodes: Record<NodeId, LayoutNode>
+  /** Android only: which app the on-device agent belongs to, when the server knows. */
+  app?: AndroidApp
+}
+
+/**
+ * The Android app a snapshot came from. `source: 'agent'` — the on-device agent
+ * reported `package` (and maybe `pid`) in `/health`; `source: 'adb'` — it did not, and
+ * `adb shell pidof` only confirmed that the configured package is running.
+ */
+export interface AndroidApp {
+  package: string
+  pid: number | null
+  source: 'agent' | 'adb'
 }
 
 /**
@@ -194,6 +207,11 @@ export interface ChatMessage {
  * - `device_no_adb`     — adb binary missing / not on PATH.
  * - `device_not_found`  — no device, device offline or unauthorized.
  * - `device_no_bridge`  — device reachable but the debug bridge in the app does not answer.
+ * - `device_unresponsive` — adb lists the device, but the adb link does not answer
+ *                         (`adb shell` times out, typical of stalled wireless debugging);
+ *                         the app is not at fault, the connection has to be re-established.
+ * - `device_wrong_app`  — the agent on the port belongs to another app than the configured
+ *                         one (`LD_ANDROID_PACKAGE`), or the configured app is not running.
  * - `device`            — any other device capture failure.
  * - `live_edit`         — applying a live override on the device failed.
  * - `reset_edits`       — clearing device overrides failed.
@@ -206,6 +224,8 @@ export type ErrorCode =
   | 'device_no_adb'
   | 'device_not_found'
   | 'device_no_bridge'
+  | 'device_unresponsive'
+  | 'device_wrong_app'
   | 'device'
   | 'live_edit'
   | 'reset_edits'
@@ -216,6 +236,8 @@ export const DEVICE_ERROR_CODES: readonly ErrorCode[] = [
   'device_no_adb',
   'device_not_found',
   'device_no_bridge',
+  'device_unresponsive',
+  'device_wrong_app',
   'device',
   'screenshot',
 ]
@@ -312,6 +334,8 @@ export type UiToServer =
   | { t: 'overrides'; overrides: Override[] }
   | { t: 'submit'; comment: string }
   | { t: 'clearRequests' }
+  /** Empties the server's chat history; every window gets `chatCleared`. */
+  | { t: 'clearChat' }
   /** The user closed the one-time telemetry notice; the server remembers it in the telemetry state file. */
   | { t: 'telemetryNoticeDismissed' }
   // --- android target: the device is reachable only through the server ---
@@ -326,7 +350,11 @@ export type ServerToUi =
       projectDir: string | null
       targetUrl: string
       device: string | null
-      /** `ro.product.model` of the device, e.g. "Pixel 8"; null on web or when adb cannot tell. */
+      /**
+       * `ro.product.model` of the device, e.g. "Pixel 8"; null on web, when adb cannot
+       * tell, or when it is not known yet — `ready` never waits for adb, a model found
+       * later arrives as `deviceModel`.
+       */
       deviceModel: string | null
       /** An agent is waiting for messages over MCP; later changes come as `agentStatus`. */
       listening: boolean
@@ -341,8 +369,12 @@ export type ServerToUi =
    * ended < 10 s ago, or a request it handed out is still `working` (no reply yet).
    */
   | { t: 'agentStatus'; listening: boolean }
+  /** Android: the device model, once adb told it after `ready` went out with `deviceModel: null`. */
+  | { t: 'deviceModel'; deviceModel: string }
   | { t: 'chat'; message: ChatMessage }
   | { t: 'chatDone' }
+  /** The chat history was cleared (from a window or `DELETE /api/chat`): drop every message. */
+  | { t: 'chatCleared' }
   | { t: 'requests'; requests: EditRequest[] }
   /**
    * One EditRequest changed status. Broadcast to every window on each transition.
@@ -350,7 +382,11 @@ export type ServerToUi =
    * `code`/`message` are set only with `status: 'error'`.
    */
   | { t: 'requestStatus'; id: string; status: RequestStatus; code?: ErrorCode; message?: string }
-  /** Android snapshot pushed by the server; `frame` busts the screenshot cache. */
+  /**
+   * Android snapshot pushed by the server; `frame` busts the screenshot cache. The
+   * picture taken with this tree is held by the server: `GET /api/android/screenshot?f=<frame>`
+   * answers from memory instead of asking the device again.
+   */
   | { t: 'androidSnapshot'; snapshot: Snapshot; frame: number }
   /** `message` is localized human text; branch on `code`. `requestId` is set for request errors. */
   | { t: 'error'; code: ErrorCode; message: string; requestId?: string }

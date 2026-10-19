@@ -23,6 +23,7 @@ import {
   type WaitResponse,
 } from '../shared/protocol.ts'
 import { AndroidAdapter, classifyCaptureError } from './android.ts'
+import { Coalescer, FrameCache, parseFrameParam } from './androidCapture.ts'
 import { loadConfig, type Config } from './config.ts'
 import { errorText, resolveLocale, t } from './i18n.ts'
 import {
@@ -106,9 +107,42 @@ let uiLocale: Locale = DEFAULT_LOCALE
 const clientLocales = new Map<WebSocket, Locale>()
 const localeOf = (ws: WebSocket): Locale => clientLocales.get(ws) ?? uiLocale
 
-const android = config.target === 'android' ? new AndroidAdapter(config.androidPort, config.device) : null
+const android =
+  config.target === 'android' ? new AndroidAdapter(config.androidPort, config.device, config.androidPackage) : null
 /** Bumped on every device capture so the UI's <img> refetches instead of showing a stale frame. */
 let androidFrame = 0
+/** The device picture of the newest frame (one, so memory stays bounded); see serveAndroidScreenshot. */
+const androidFrames = new FrameCache<Buffer>()
+/** Last picture failure logged, so a device that keeps failing logs it once, not on every poll. */
+let lastFrameWarning = ''
+
+/**
+ * One device capture at a time, whoever asks: every open window polls, and each poll
+ * used to start its own capture. Callers that come while one runs share its result,
+ * which every window gets through the same `androidSnapshot` broadcast.
+ */
+const androidCaptures = android
+  ? new Coalescer(async () => {
+      // A live edit or a reset that lands while this capture runs makes its picture stale:
+      // it is then not kept, and the window fetches the frame live (androidFrames.put).
+      const takenAt = androidFrames.epoch
+      const { snapshot, png, pngError } = await android.captureFrame()
+      session.setSnapshot(snapshot)
+      noteSnapshot(snapshot)
+      androidFrame++
+      if (png) {
+        androidFrames.put(androidFrame, png, takenAt)
+        lastFrameWarning = ''
+      } else {
+        const why = errorText('en', pngError)
+        if (why !== lastFrameWarning) {
+          console.warn(`[layout-debug] the device picture of a capture failed (${why}); the window asks for it again`)
+          lastFrameWarning = why
+        }
+      }
+      broadcast({ t: 'androidSnapshot', snapshot, frame: androidFrame })
+    })
+  : null
 
 const hub = new WaitHub({
   pending: () => session.undelivered(),
@@ -155,7 +189,7 @@ const http = createServer((req, res) => {
 
   if (url.pathname === '/inspector.js') return serveInspector(res)
   if (url.pathname === '/demo' || url.pathname.startsWith('/demo/')) return serveDemo(url.pathname, res)
-  if (url.pathname === '/api/android/screenshot') return void serveAndroidScreenshot(res)
+  if (url.pathname === '/api/android/screenshot') return void serveAndroidScreenshot(url, res)
   if (isApi) return serveApi(url, req, res)
   return serveWindow(url.pathname, req, res)
 })
@@ -262,13 +296,20 @@ function serveWindow(pathname: string, req: IncomingMessage, res: ServerResponse
   createReadStream(file).pipe(res)
 }
 
-async function serveAndroidScreenshot(res: ServerResponse) {
+/**
+ * The device picture. `?f=<frame>` (the frame of an `androidSnapshot`) is answered
+ * from the picture the capture took together with that tree, without asking the
+ * device again; a frame with no picture in memory (a live edit moved the frame on, or
+ * the capture's picture failed) is fetched from the device once, shared by every
+ * window asking meanwhile. Without `f`: the newest picture in memory, or a live one.
+ */
+async function serveAndroidScreenshot(url: URL, res: ServerResponse) {
   if (!android) {
     sendJson(res, { error: 'the target is not android (set LD_TARGET=android)' }, 409)
     return
   }
   try {
-    const png = await android.screenshot()
+    const png = await androidFrames.get(parseFrameParam(url.searchParams), androidFrame, () => android.screenshot())
     res.writeHead(200, { 'content-type': MIME['.png']!, 'cache-control': 'no-store' })
     res.end(png)
   } catch (err) {
@@ -326,7 +367,14 @@ function requirePost(req: IncomingMessage, res: ServerResponse, path: string): b
  * what happened without switching to the agent's own interface.
  */
 async function postChat(req: IncomingMessage, res: ServerResponse) {
-  if (!requirePost(req, res, '/api/chat')) return
+  if (req.method === 'DELETE') {
+    clearChat()
+    return sendJson(res, { ok: true })
+  }
+  if (req.method !== 'POST') {
+    res.setHeader('allow', 'POST, DELETE')
+    return sendJson(res, { error: `use POST (send) or DELETE (clear) for /api/chat, not ${req.method}` }, 405)
+  }
   let parsed: Partial<PostChatBody>
   try {
     parsed = JSON.parse((await readBody(req)) || '{}') as Partial<PostChatBody>
@@ -478,6 +526,7 @@ function serveApi(url: URL, req: IncomingMessage, res: ServerResponse) {
         overrides: session.overrides,
         unit: session.snapshot?.unit ?? null,
         pxPerUnit: session.snapshot?.pxPerUnit ?? null,
+        app: session.snapshot?.app ?? null,
       })
     }
     case '/api/requests':
@@ -531,6 +580,13 @@ function broadcast(msg: ServerToUi) {
   for (const ws of clients) send(ws, msg)
 }
 
+/** Empties the chat history (window `clearChat` or `DELETE /api/chat`) and tells every window. */
+function clearChat() {
+  const count = session.clearChat()
+  console.log(`[layout-debug] chat cleared (${count} message${count === 1 ? '' : 's'})`)
+  broadcast({ t: 'chatCleared' })
+}
+
 /** Tells every window the current status of one request, as Session holds it. */
 function announceStatus(id: string) {
   const r = session.requests.find((x) => x.id === id)
@@ -557,9 +613,15 @@ wss.on('connection', (ws) => {
   void greet(ws)
 })
 
-async function greet(ws: WebSocket) {
-  // adb answers in tens of ms; the timeout inside deviceModel() caps the worst case.
-  const deviceModel = android ? await android.deviceModel() : null
+function greet(ws: WebSocket) {
+  // `ready` never waits for adb: with no device, `getprop` took up to its 3 s timeout
+  // on every window connect. A model not known yet follows as its own message.
+  const deviceModel = android?.knownModel ?? null
+  if (android && !deviceModel) {
+    void android.deviceModel().then((model) => {
+      if (model) send(ws, { t: 'deviceModel', deviceModel: model })
+    })
+  }
   send(ws, {
     t: 'ready',
     target: config.target,
@@ -618,6 +680,9 @@ function onUiMessage(ws: WebSocket, raw: unknown) {
       broadcast({ t: 'requests', requests: session.requests })
       hub.refresh()
       break
+    case 'clearChat':
+      clearChat()
+      break
     case 'submit':
       handleSubmit(ws, msg.comment)
       break
@@ -645,14 +710,16 @@ function onUiMessage(ws: WebSocket, raw: unknown) {
 
 // --- android target ---------------------------------------------------------
 
-async function captureAndroid(ws: WebSocket) {
-  if (!android) return
+/**
+ * A device capture for `ws`: joins the one in flight, if any (polls from several
+ * windows), or — `fresh`, after the caller changed the device — waits for one that
+ * starts after now. The result reaches every window as `androidSnapshot`; a failure
+ * goes to each window that asked.
+ */
+async function captureAndroid(ws: WebSocket, fresh = false) {
+  if (!androidCaptures) return
   try {
-    const snapshot = await android.capture()
-    session.setSnapshot(snapshot)
-    noteSnapshot(snapshot)
-    androidFrame++
-    broadcast({ t: 'androidSnapshot', snapshot, frame: androidFrame })
+    await (fresh ? androidCaptures.fresh() : androidCaptures.join())
   } catch (err) {
     send(ws, {
       t: 'error',
@@ -665,9 +732,14 @@ async function captureAndroid(ws: WebSocket) {
 async function applyAndroidOverride(ws: WebSocket, override: Override) {
   if (!android) return
   usage.liveEdits++
+  // Before: a capture in flight must not publish its picture after this edit. After: one
+  // that started while the request was on its way may still have photographed the old state.
+  androidFrames.changed()
   try {
     await android.setOverride(override)
+    androidFrames.changed()
   } catch (err) {
+    androidFrames.changed()
     send(ws, {
       t: 'error',
       code: 'live_edit',
@@ -678,16 +750,22 @@ async function applyAndroidOverride(ws: WebSocket, override: Override) {
   // The tweak only exists on the device; refetching the frame is the only way the
   // desktop sees what actually happened. With no capture yet there is no tree to
   // pair the frame with, so take a full one.
-  if (!session.snapshot) return captureAndroid(ws)
+  if (!session.snapshot) return captureAndroid(ws, true)
   androidFrame++
   broadcast({ t: 'androidSnapshot', snapshot: session.snapshot, frame: androidFrame })
 }
 
 async function clearAndroidOverrides(ws: WebSocket) {
   if (!android) return
+  // The same as a live edit: pictures taken before the reset landed are not kept.
+  androidFrames.changed()
   try {
-    await android.clearOverrides()
-    await captureAndroid(ws)
+    try {
+      await android.clearOverrides()
+    } finally {
+      androidFrames.changed()
+    }
+    await captureAndroid(ws, true)
   } catch (err) {
     send(ws, {
       t: 'error',
@@ -836,8 +914,13 @@ http.listen(SERVER_PORT, LISTEN_HOST, async () => {
     console.warn(`[layout-debug] the window is not built (${UI_INDEX} is missing); run npm run build`)
   }
   if (android) {
+    // Warm the model cache so the first window's `ready` already carries it.
+    void android.deviceModel()
     const devices = await AndroidAdapter.devices().catch(() => [])
-    console.log(`[layout-debug] target: android, device agent port ${config.androidPort}`)
+    console.log(
+      `[layout-debug] target: android, device agent port ${config.androidPort}` +
+        (config.androidPackage ? `, expected app ${config.androidPackage}` : ''),
+    )
     console.log(
       `[layout-debug] devices: ${devices.length ? devices.join(', ') : 'adb sees none'}` +
         (config.device ? ` (selected: ${config.device})` : ''),
