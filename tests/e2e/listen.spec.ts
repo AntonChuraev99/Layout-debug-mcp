@@ -206,11 +206,11 @@ test('L5 sent with nobody listening: waits in the Inbox; the next wait_for_messa
   await openWindow(page)
   await expect(noAgentListening(page)).toBeVisible()
   const frame = frameOf(page)
-  const cancel = frame.getByRole('button', { name: 'Отмена' })
+  const cancel = frame.getByRole('button', { name: 'Cancel' })
   const cta = frame.getByTestId('cta-continue')
   const stamp = Date.now()
-  const first = `e2e-L5 first: make Отмена smaller ${stamp}`
-  const second = `e2e-L5 second: make Продолжить bolder ${stamp}`
+  const first = `e2e-L5 first: make Cancel smaller ${stamp}`
+  const second = `e2e-L5 second: make Continue bolder ${stamp}`
 
   await sendEdit(page, cancel, first)
   const chat = chatDialog(page)

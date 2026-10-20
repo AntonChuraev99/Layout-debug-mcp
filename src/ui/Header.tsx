@@ -1,4 +1,5 @@
-import { useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import type { AndroidApp } from '../shared/protocol.ts'
 import { LOCALE_NAMES, LOCALES, useT, type Translate } from './i18n.ts'
 import { Popover } from './Popover.tsx'
 import { BrandGlyph, IconGlobe, IconInbox, IconSmartphone } from './icons.tsx'
@@ -34,7 +35,8 @@ interface Props {
   urlDraft: string
   onUrlDraft: (v: string) => void
   onOpenUrl: () => void
-  device: { name: string; serial: string | null } | null
+  /** `app`: the Android app the on-device agent belongs to, when the server knows it. */
+  device: { name: string; serial: string | null; app?: Pick<AndroidApp, 'package' | 'source'> | null } | null
   inbox: { open: number; working: boolean; unread: boolean }
   inboxOpen: boolean
   onInboxToggle: (open: boolean) => void
@@ -51,7 +53,7 @@ interface Props {
   loading: boolean
 }
 
-export function Header(p: Props) {
+export const Header = memo(function Header(p: Props) {
   const { t } = p
   const inboxRef = useRef<HTMLButtonElement | null>(null)
   const statusRef = useRef<HTMLButtonElement | null>(null)
@@ -99,6 +101,14 @@ export function Header(p: Props) {
             <>
               <b>{p.device.name}</b>
               {p.device.serial && <span className="device-chip__serial">{p.device.serial}</span>}
+              {p.device.app && (
+                <span
+                  className="device-chip__serial device-chip__app"
+                  title={t(p.device.app.source === 'adb' ? 'device.appAdb' : 'device.appAgent')}
+                >
+                  {p.device.app.package}
+                </span>
+              )}
             </>
           ) : (
             <span>{t('device.none')}</span>
@@ -185,7 +195,7 @@ export function Header(p: Props) {
       {p.loading && <span className="tb__progress" aria-hidden="true" />}
     </header>
   )
-}
+})
 
 /**
  * The always-on hint "Alt · hover to inspect · click to select" (DESIGN_SPEC §6). Below

@@ -62,7 +62,7 @@ test('1 empty state: no target → open a URL typed without a scheme', async ({ 
 
   await expect(addressField(page)).toHaveValue(DEMO_URL)
   await expect(page.locator('iframe[title="Page being edited"]')).toHaveAttribute('src', DEMO_URL)
-  await expect(frameOf(page).getByRole('heading', { name: 'Годовая подписка' })).toBeVisible()
+  await expect(frameOf(page).getByRole('heading', { name: 'Annual plan' })).toBeVisible()
   await waitForServerSnapshot(since, (n) => n.anchors.testId === 'cta-continue')
   await expect(page.getByText(/^\d+ layers$/)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Open the page you want to edit' })).toHaveCount(0)

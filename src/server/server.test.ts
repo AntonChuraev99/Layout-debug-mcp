@@ -215,6 +215,56 @@ describe('server: listen mode over HTTP', () => {
   })
 })
 
+describe('server: clearing the chat', () => {
+  const post = (text: string) =>
+    fetch(`${BASE}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) })
+
+  test('DELETE /api/chat from the window empties the history for every window; a foreign origin is refused', async () => {
+    const a = await openWindow()
+    const b = await openWindow()
+    await a.until((f) => f.t === 'ready')
+    await b.until((f) => f.t === 'ready')
+    assert.equal((await post('first')).status, 200)
+    await b.until((f) => f.t === 'chat' && f.message.text === 'first')
+
+    const foreign = await fetch(`${BASE}/api/chat`, { method: 'DELETE', headers: { origin: 'https://evil.example' } })
+    assert.equal(foreign.status, 403)
+    const crossSite = await fetch(`${BASE}/api/chat`, { method: 'DELETE', headers: { 'sec-fetch-site': 'cross-site' } })
+    assert.equal(crossSite.status, 403)
+    assert.equal(a.frames.some((f) => f.t === 'chatCleared'), false, 'a refused clear changes nothing')
+
+    const ok = await fetch(`${BASE}/api/chat`, { method: 'DELETE', headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin' } })
+    assert.equal(ok.status, 200)
+    await a.until((f) => f.t === 'chatCleared')
+    await b.until((f) => f.t === 'chatCleared')
+
+    // A window that opens now gets no replay of the cleared thread.
+    const late = await openWindow()
+    await late.until((f) => f.t === 'requests')
+    await new Promise((r) => setTimeout(r, 200))
+    assert.equal(late.frames.some((f) => f.t === 'chat'), false)
+    for (const w of [a, b, late]) w.ws.close()
+  })
+
+  test('the clearChat WebSocket message does the same; other methods on /api/chat get 405', async () => {
+    const win = await openWindow()
+    await win.until((f) => f.t === 'ready')
+    await post('second')
+    await win.until((f) => f.t === 'chat' && f.message.text === 'second')
+    win.send({ t: 'clearChat' })
+    await win.until((f) => f.t === 'chatCleared')
+    const late = await openWindow()
+    await late.until((f) => f.t === 'requests')
+    await new Promise((r) => setTimeout(r, 200))
+    assert.equal(late.frames.some((f) => f.t === 'chat'), false)
+
+    const put = await fetch(`${BASE}/api/chat`, { method: 'PUT' })
+    assert.equal(put.status, 405)
+    assert.equal(put.headers.get('allow'), 'POST, DELETE')
+    for (const w of [win, late]) w.ws.close()
+  })
+})
+
 describe('server: packaged window (served from the server port, no Vite)', () => {
   const built = existsSync(join(PACKAGE_ROOT, 'dist', 'ui', 'index.html'))
   const skip = built ? false : 'dist/ui/index.html is missing: run npm run build first (CI builds before tests)'

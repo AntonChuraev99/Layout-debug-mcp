@@ -177,3 +177,23 @@ describe('Session.undelivered (what wait_for_message hands out)', () => {
     assert.deepEqual(s.undelivered().map((r) => r.id), [a.id])
   })
 })
+
+describe('Session.clearChat', () => {
+  test('drops every message, keeps the requests, and reports how many went', () => {
+    const s = sessionWithSelection()
+    const a = s.buildRequest('a')!
+    s.addChat({ id: a.id, role: 'user', text: 'a', requestId: a.id })
+    s.addReply('done', 'assistant', a.id)
+    s.addChat({ id: 'free', role: 'system', text: 'note' })
+    assert.equal(s.chat.length, 3)
+
+    assert.equal(s.clearChat(), 3)
+    assert.equal(s.chat.length, 0)
+    assert.deepEqual(s.requests.map((r) => r.id), [a.id], 'the queue is not the thread')
+    assert.equal(s.requests[0]!.status, 'done')
+
+    assert.equal(s.clearChat(), 0, 'clearing an empty chat is a no-op')
+    s.addChat({ id: 'next', role: 'user', text: 'again' })
+    assert.deepEqual(s.chat.map((m) => m.id), ['next'], 'new messages land in the emptied history')
+  })
+})

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
+import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
 import type { LayoutNode, NodeId, Override, Rect, Snapshot } from '../shared/protocol.ts'
 import { altHeld } from '../inspector/keys.ts'
 import { placeLabel } from './geometry.ts'
@@ -120,7 +120,7 @@ type Drag =
 
 const RESIZE_CURSOR: Record<Corner, string> = { tl: 'nwse-resize', br: 'nwse-resize', tr: 'nesw-resize', bl: 'nesw-resize' }
 
-export function Overlay({
+export const Overlay = memo(function Overlay({
   snapshot,
   overrides,
   selectedId,
@@ -627,7 +627,7 @@ export function Overlay({
       })}
     </div>
   )
-}
+})
 
 /**
  * A chip over its box. Its width is only known after layout, so placement is a DOM

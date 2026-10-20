@@ -81,7 +81,7 @@ test('28 telemetry notice: shown once, "Got it" hides it, a reload does not brin
     }
   })
   await page.goto(UI)
-  await expect(frameOf(page).getByRole('heading', { name: 'Годовая подписка' })).toBeVisible({ timeout: 20_000 })
+  await expect(frameOf(page).getByRole('heading', { name: 'Annual plan' })).toBeVisible({ timeout: 20_000 })
 
   const notice = page.getByRole('region', { name: 'Usage data' })
   await expect(notice).toBeVisible()
@@ -106,7 +106,7 @@ test('28 telemetry notice: shown once, "Got it" hides it, a reload does not brin
 
   await page.reload()
   // The frame loads the target that `ready` names, so by now that `ready` has been handled.
-  await expect(frameOf(page).getByRole('heading', { name: 'Годовая подписка' })).toBeVisible({ timeout: 20_000 })
+  await expect(frameOf(page).getByRole('heading', { name: 'Annual plan' })).toBeVisible({ timeout: 20_000 })
   await expect(notice).toHaveCount(0)
   // Debug mode printed the events instead of sending them.
   expect(logs.some((l) => l.includes('[layout-debug telemetry]'))).toBe(true)

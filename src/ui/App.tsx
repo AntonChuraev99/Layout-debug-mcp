@@ -5,7 +5,10 @@ import { AgentPopoverBody } from './AgentConnect.tsx'
 import { serverOrigin } from './origins.ts'
 import { Blank, CopyBlock } from './Blank.tsx'
 import { ChatPopover, type LocalMessage } from './ChatPopover.tsx'
-import { frameCropRect, placeHeldPopover, placePopover, union, type Side } from './geometry.ts'
+import { frameCropRect, placeHeldPopover, union, type Side } from './geometry.ts'
+import { CaptureButton } from './CaptureButton.tsx'
+import { elementKey, findIndexed, indexByPath, resolveSelected, type SelectionAnchor } from './selection.ts'
+import { useStableCallback } from './useStable.ts'
 import { androidStateFor, rejectsSubmit, resolveRequestErrors, type AndroidState } from './errors.ts'
 import { Header, type StatusInfo } from './Header.tsx'
 import { useT, type MsgKey } from './i18n.ts'
@@ -32,7 +35,6 @@ import {
   bestAnchor,
   ellipsize,
   ERROR_LINE_PREFIX,
-  findNode,
   finishedBetween,
   isOpen,
   requestStatus,
@@ -111,6 +113,8 @@ const IS_MAC = (() => {
 const FLOAT_MARGIN = 12
 /** DESIGN_SPEC Motion: the palette/chat card fades out this long (styles.css `float-out`). */
 const FLOAT_HIDE_MS = 100
+/** The card while a drag runs: hidden, still mounted (styles.css). */
+const FLOAT_ASIDE_CLASS = 'float__card--aside'
 
 type ChatTarget = null | { kind: 'node' } | { kind: 'missing'; request: EditRequest }
 
@@ -179,8 +183,9 @@ export function App() {
   const web = useTarget(iframeRef, targetEvents)
   const { t: translateKey, rich, locale } = useT()
   const altName = IS_MAC ? 'Option' : 'Alt'
-  // Every text that names the modifier says Option on macOS.
-  const t: typeof translateKey = (key, params) => translateKey(key, { alt: altName, ...params })
+  // Every text that names the modifier says Option on macOS. Stable per language: it goes to
+  // memoized children (the header).
+  const t = useCallback<typeof translateKey>((key, params) => translateKey(key, { alt: altName, ...params }), [translateKey, altName])
   const { state, send, submit, clearError } = useServer(locale)
   const isAndroid = state.target === 'android'
 
@@ -198,7 +203,11 @@ export function App() {
   const [inspectorSilent, setInspectorSilent] = useState(false)
   const [bannerHidden, setBannerHidden] = useState(false)
 
-  const [selectedId, setSelectedId] = useState<NodeId | null>(null)
+  /**
+   * What the user picked: the node id at the moment of the pick and the anchors that outlive
+   * it. The id on screen now is `selectedId` below, resolved from this on every snapshot.
+   */
+  const [selection, setSelection] = useState<SelectionAnchor | null>(null)
   /** The palette's arrow-key row: Move or Resize, at most one. */
   const [nudge, setNudge] = useState<NudgeKind | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -255,11 +264,44 @@ export function App() {
   const reloading = cycle.current?.target === 'web' && cycle.current.phase === 'fresh'
   // While the old page is held over the reloaded one, the overlay draws what that page shows:
   // its snapshot with its live edits (overlaySource). The same flag drops the held frame.
-  const webView = overlaySource(swap?.view ?? null, { snapshot: web.snapshot, overrides: web.overrides })
-  const holdingFrame = !isAndroid && swap !== null && webView.holding
+  const liveView = overlaySource(swap?.view ?? null, { snapshot: web.snapshot, overrides: web.overrides })
+  /**
+   * The new page reported its first snapshot. That can come a few ms after its `load`, before
+   * the window has painted a single frame with the old page held, and before the new document
+   * painted at all: dropping the hold right then shows nothing of it (or a white frame). The
+   * swap ends after the window painted once more (the effect below); until then the overlay
+   * keeps drawing the old page with it, so frame and boxes still switch in one render.
+   */
+  const newPageIn = swap !== null && !liveView.holding
+  const webView = swap ? { snapshot: swap.view.snapshot, overrides: swap.view.overrides, holding: true } : liveView
+  const holdingFrame = !isAndroid && swap !== null
+  // Two animation frames: the first is painted with the old page still held (its rAF runs
+  // before that paint), the second comes after it — by then the new document has had a frame.
+  useEffect(() => {
+    if (!newPageIn) return
+    let second = 0
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setSwap(null))
+    })
+    return () => {
+      cancelAnimationFrame(first)
+      cancelAnimationFrame(second)
+    }
+  }, [newPageIn])
   const snapshot = isAndroid ? state.androidSnapshot : (webView.snapshot ?? (reloading ? lastWebSnapshot.current : null))
   const overrides = isAndroid ? androidOverrides : webView.overrides
-  const selected = selectedId && snapshot ? snapshot.nodes[selectedId] : undefined
+  // Node ids do not survive a page reload, a re-render that replaced the element, or a device
+  // recapture: the selection follows its element by anchor, read in this render, not one
+  // effect later. A render without the selected element would unmount the open chat or
+  // palette and mount it again (scroll reset, focus taken back); a state update per recapture
+  // to move the id would re-render the whole window once more per device frame.
+  const nodeIndex = useMemo(() => (snapshot ? indexByPath(snapshot) : null), [snapshot])
+  const selected = useMemo(
+    () => resolveSelected(snapshot, selection?.id ?? null, selection, nodeIndex ?? undefined),
+    [snapshot, selection, nodeIndex],
+  )
+  // No snapshot for a moment (a page between documents): the pick stands until one is back.
+  const selectedId: NodeId | null = selected?.id ?? (snapshot ? null : (selection?.id ?? null))
 
   // A drag fires a pointermove per pixel. On web that is a postMessage; on Android it
   // is an adb round-trip plus a screenshot refetch, so it has to be rate-limited —
@@ -339,7 +381,7 @@ export function App() {
     [ghostFailed],
   )
 
-  const setOverride = useCallback(
+  const setOverride = useStableCallback(
     (override: Override) => {
       if (!isAndroid) {
         web.setOverride(override)
@@ -360,10 +402,9 @@ export function App() {
       if (since >= ANDROID_OVERRIDE_INTERVAL_MS) flush()
       else trailing.current = window.setTimeout(flush, ANDROID_OVERRIDE_INTERVAL_MS - since)
     },
-    [isAndroid, send, web, takeOriginGhost, dropOriginGhost],
   )
 
-  const clearOverride = useCallback(
+  const clearOverride = useStableCallback(
     (nodeId: NodeId) => {
       if (isAndroid) {
         // The device agent has no per-node undo: clear everything, then re-apply the rest.
@@ -376,7 +417,6 @@ export function App() {
         web.clearOverride(nodeId)
       }
     },
-    [androidOverrides, isAndroid, send, web, dropOriginGhost],
   )
 
   const deviceFrame = useDeviceFrame(state.androidFrame, isAndroid && Boolean(state.androidSnapshot))
@@ -440,11 +480,15 @@ export function App() {
   }, [overrideList, send, state.online])
 
   // A new element starts with the toggles off and the chat closed; re-picking the same one changes nothing.
+  // The id the user picks is one of the snapshot on screen, which holds its anchors.
   const selectedRef = useRef<NodeId | null>(null)
   selectedRef.current = selectedId
+  const shownSnapshot = useRef(snapshot)
+  shownSnapshot.current = snapshot
   const selectNode = useCallback((id: NodeId | null) => {
     if (id === selectedRef.current) return
-    setSelectedId(id)
+    const anchors = id ? shownSnapshot.current?.nodes[id]?.anchors : undefined
+    setSelection(id ? { id, anchors: anchors ?? { path: '' } } : null)
     setNudge(null)
     setChat((c) => (c?.kind === 'node' ? null : c))
     // Another element: its palette starts with an empty field and takes no focus by itself
@@ -453,35 +497,17 @@ export function App() {
     setFocusRequest(null)
   }, [])
 
-  // Node ids do not survive a page reload or a device recapture: the selection follows its
-  // element by anchor. Gone for good — the selection goes, and an open thread stays on screen
-  // as the "element not found" chat, still tied to the anchor.
-  const selectedAnchor = useRef<{ id: NodeId; anchors: LayoutNode['anchors'] } | null>(null)
+  // Gone for good (no node with its anchors in a new snapshot) — the selection goes, and an
+  // open thread stays on screen as the "element not found" chat, still tied to the anchor.
   useEffect(() => {
-    if (!selectedId) {
-      selectedAnchor.current = null
-      return
-    }
-    if (!snapshot) return
-    const prev = selectedAnchor.current
-    const cur = snapshot.nodes[selectedId]
-    if (prev && prev.id === selectedId && (!cur || !sameElement(cur, prev))) {
-      const found = findNode(snapshot, prev)
-      if (found) {
-        setSelectedId(found.id)
-        return
-      }
-      selectedAnchor.current = null
-      const thread = state.requests.filter((r) => sameElement(r.node, prev))
-      const last = thread[thread.length - 1]
-      setSelectedId(null)
-      setNudge(null)
-      setChat((c) => (c?.kind === 'node' ? (last ? { kind: 'missing', request: last } : null) : c))
-      return
-    }
-    if (cur) selectedAnchor.current = { id: selectedId, anchors: cur.anchors }
+    if (!selection || !snapshot || selected) return
+    const thread = state.requests.filter((r) => sameElement(r.node, selection))
+    const last = thread[thread.length - 1]
+    setSelection(null)
+    setNudge(null)
+    setChat((c) => (c?.kind === 'node' ? (last ? { kind: 'missing', request: last } : null) : c))
     // state.requests is read only when the element is gone; a new list alone changes nothing here.
-  }, [snapshot, selectedId])
+  }, [snapshot, selection, selected])
 
   // --- web frame lifecycle: loading → hello, or silence ---
   useEffect(() => {
@@ -516,11 +542,12 @@ export function App() {
     [state.errors, state.statuses, locale],
   )
 
+  // Every request against every snapshot (Android: one per ~0.8 s), so through the path index.
   const nodeOfRequest = useMemo(() => {
     const map = new Map<string, LayoutNode | undefined>()
-    for (const r of state.requests) map.set(r.id, snapshot ? findNode(snapshot, r.node) : undefined)
+    for (const r of state.requests) map.set(r.id, nodeIndex ? findIndexed(nodeIndex, r.node) : undefined)
     return map
-  }, [state.requests, snapshot])
+  }, [state.requests, nodeIndex])
 
   const chatTargetIsNode = useCallback(
     (r: EditRequest) => {
@@ -566,8 +593,9 @@ export function App() {
     if (!c) return
     window.clearTimeout(c.timer)
     cycle.current = null
-    // The new page is in (or never came): it takes over from the held old one either way.
-    setSwap(null)
+    // No new page in time: the held old one goes now. A new page that came in takes over once
+    // the window painted it (the effect on `newPageIn`).
+    if (failed) setSwap(null)
     const ids = c.requests.map((r) => r.id)
     setHolding((s) => new Set([...s].filter((id) => !ids.includes(id))))
     fadeOut(ids)
@@ -625,7 +653,7 @@ export function App() {
       c.requests.push(...requests)
       if (c.target === 'android') {
         clearHandedOverAndroid(requests)
-        c.frameTarget = L.androidFrame + (L.refresh.inflight ? 2 : 1)
+        c.frameTarget = L.androidFrame + (L.refresh.isInflight() ? 2 : 1)
         L.refresh.refreshNow()
       } else if (c.phase === 'grace') {
         window.clearTimeout(c.timer)
@@ -645,7 +673,7 @@ export function App() {
         requests: [...requests],
         phase: 'fresh',
         baseline: null,
-        frameTarget: L.androidFrame + (L.refresh.inflight ? 2 : 1),
+        frameTarget: L.androidFrame + (L.refresh.isInflight() ? 2 : 1),
         timer: window.setTimeout(() => finishCycle(true), REFRESH_TIMEOUT_MS),
       }
       L.refresh.refreshNow()
@@ -785,7 +813,16 @@ export function App() {
     (target: { id: NodeId; anchors: LayoutNode['anchors'] }) => state.requests.filter((r) => sameElement(r.node, target)),
     [state.requests],
   )
-  const selectedRequests = useMemo(() => (selected ? requestsOf(selected) : []), [selected, requestsOf])
+  // By the element, not its node object: a recapture brings a new object for the same element,
+  // and a new list here would re-render the open chat with every device frame.
+  const selectedKey = selected ? elementKey(selected) : null
+  const selectedNow = useRef(selected)
+  selectedNow.current = selected
+  const selectedRequests = useMemo(
+    () => (selectedNow.current ? requestsOf(selectedNow.current) : []),
+    // `selectedKey` stands for `selected`: requestsOf compares only what the key holds.
+    [selectedKey, requestsOf],
+  )
   const selectedWorking = selectedRequests.some((r) => statuses.get(r.id) === 'work' || holding.has(r.id))
   const selectedWaiting = selectedRequests.some((r) => isOpen(statuses.get(r.id) ?? 'done'))
 
@@ -825,7 +862,7 @@ export function App() {
    * A pick gesture finished. `empty`: it landed on no layer (the selection went, nothing new
    * was picked) — the Alt release is still not a bare tap, but nothing counts as learned.
    */
-  const onPicked = useCallback(
+  const onPicked = useStableCallback(
     (source: PickSource, empty = false) => {
       if (source !== 'click') {
         // Both sides must know: the Alt keyup goes to whichever document has focus.
@@ -837,7 +874,6 @@ export function App() {
       if (source === 'alt' && !isAndroid) writeStorage(ALT_PICKS_KEY, String(readNumber(ALT_PICKS_KEY) + 1))
       if (!coachSeen) closeCoach()
     },
-    [alt.markPicked, isAndroid, web.notifyPicked, coachSeen, closeCoach],
   )
 
   // Alt pressed with the cursor resting on the page: highlight at once, not on the next move.
@@ -847,13 +883,12 @@ export function App() {
   }, [alt.down, isAndroid, web.queryPointer])
 
   /** One arrow step of the nudge row (DESIGN_SPEC §5). */
-  const nudgeBy = useCallback(
+  const nudgeBy = useStableCallback(
     (key: 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown', shift: boolean) => {
       if (!nudge || !selected || !snapshot || tweakBlocked) return
       const rect = effectiveRect(selected, overrides[selected.id])
       setOverride(nudgeOverride(nudge, key, shift, selected.id, overrides[selected.id], rect, snapshot.pxPerUnit))
     },
-    [nudge, selected, snapshot, tweakBlocked, overrides, setOverride],
   )
 
   // --- canvas geometry ---
@@ -884,18 +919,25 @@ export function App() {
   // --- floating card placement (palette or chat) ---
   // A layer scrolled out of the frame keeps its selection, but the palette has nothing to point at.
   const shifts = useMemo(() => (snapshot ? inheritedShifts(snapshot.nodes, overrides) : null), [snapshot, overrides])
-  const selectedOffscreen = Boolean(
-    selected && snapshot && isOffscreen(effectiveRect(selected, overrides[selected.id], shifts?.get(selected.id)), snapshot.viewport),
-  )
-  const showFloat = (chat?.kind === 'missing' || (Boolean(selected) && !selectedOffscreen)) && !dragging
+  const selectedRect = selected ? effectiveRect(selected, overrides[selected.id], shifts?.get(selected.id)) : null
+  const selectedOffscreen = Boolean(selectedRect && snapshot && isOffscreen(selectedRect, snapshot.viewport))
+  const showFloat = chat?.kind === 'missing' || (Boolean(selected) && !selectedOffscreen)
+  /**
+   * While the user drags, the card stands aside — hidden, not unmounted: the open chat keeps
+   * its scroll position and the text not sent yet, the palette its focus and rows.
+   */
+  const floatAside = dragging
   const stale = !isAndroid && web.scrolling
   // An open chat stays put while the page scrolls: the user may be typing in it.
   const floatStale = stale && !chat
-  /** `maxH`: the open chat's room on its side (placeHeldPopover); the palette has none. */
+  /** `maxH`: the card's room on its side (placeHeldPopover); past it, the card's own content scrolls. */
   const [floatPos, setFloatPos] = useState<{ x: number; y: number; side: Side; maxH?: number } | null>(null)
   const [floatSize, setFloatSize] = useState({ w: 0, h: 0 })
-  /** The side the open chat took when it opened, and whose chat it is: it grows there instead of jumping elsewhere. */
-  const chatSide = useRef<{ side: Side; anchors: LayoutNode['anchors'] } | null>(null)
+  /**
+   * The side the shown card (palette or chat) took when it opened, and whose card it is: it
+   * grows there (Details, nudge rows, new chat lines) instead of jumping elsewhere.
+   */
+  const floatSide = useRef<{ card: 'palette' | 'chat'; side: Side; anchors: LayoutNode['anchors'] } | null>(null)
 
   useEffect(() => {
     const el = floatRef.current?.firstElementChild as HTMLElement | null | undefined
@@ -903,16 +945,42 @@ export function App() {
     const observer = new ResizeObserver(() => setFloatSize({ w: el.offsetWidth, h: el.offsetHeight }))
     observer.observe(el)
     return () => observer.disconnect()
-  }, [showFloat, chat?.kind, selectedId])
+  }, [showFloat, chat?.kind, selected ? elementKey(selected) : null])
+
+  // Placement reads the boxes of the selection from the DOM (getBoundingClientRect), so it runs
+  // only when something it depends on changed — not on every snapshot (Android: every ~0.8 s)
+  // when the element stands where it stood.
+  const floatKind = chat?.kind === 'node' ? 'chat' : chat ? null : 'palette'
+  const placementKey = [
+    showFloat,
+    floatAside,
+    floatKind,
+    chat?.kind === 'missing' ? chat.request.id : '',
+    selected ? elementKey(selected) : '',
+    selectedRect ? `${selectedRect.x},${selectedRect.y},${selectedRect.w},${selectedRect.h}` : '',
+    `${device.scale},${device.x},${device.y}`,
+    `${canvasBox.w},${canvasBox.h}`,
+    `${floatSize.w},${floatSize.h}`,
+    detailsOpen,
+    // The selection's label (a [data-anchor] box) changes with these.
+    selectedWorking,
+    picking,
+    Boolean(tweakBlocked),
+  ].join('|')
 
   useLayoutEffect(() => {
+    // Hidden during a drag: keeps its place, and is placed again when the drag ends.
+    if (floatAside) return
     const canvas = canvasRef.current
     const card = floatRef.current?.firstElementChild as HTMLElement | null | undefined
-    // A chat that closes (or turns into the palette) gives up its side; the next one picks afresh.
-    // So does a chat that switches to another element in one render (opened from the Inbox).
-    // A reload keeps the side: the id changes, the element's anchors do not.
-    const owner = selectedId ? snapshot?.nodes[selectedId] : undefined
-    if (chat?.kind !== 'node' || (owner && chatSide.current && !sameElement(owner, { ...owner, anchors: chatSide.current.anchors }))) chatSide.current = null
+    // A card gives up its side when it closes or turns into the other card (palette ↔ chat):
+    // the next one picks afresh. So does a card that switches to another element in one render
+    // (another pick, a chat opened from the Inbox). A reload keeps the side: the id changes,
+    // the element's anchors do not.
+    const kind = chat?.kind === 'node' ? 'chat' : chat ? null : 'palette'
+    const owner = selected
+    const held = floatSide.current
+    if (!kind || held?.card !== kind || (owner && held && !sameElement(owner, { ...owner, anchors: held.anchors }))) floatSide.current = null
     if (!showFloat || !canvas || !card) {
       setFloatPos(null)
       return
@@ -933,30 +1001,30 @@ export function App() {
       return
     }
     const anchor = rects.reduce(union)
-    // The chat grows with every line: it keeps the side it opened on and is capped to that
-    // side's room (its log scrolls), instead of being re-placed from its grown size.
-    const p: { x: number; y: number; side: Side; maxH?: number } =
-      chat?.kind === 'node'
-        ? placeHeldPopover(anchor, size, box, chatSide.current?.side ?? null, 12, FLOAT_MARGIN)
-        : placePopover(anchor, size, box, 12, FLOAT_MARGIN)
-    if (chat?.kind === 'node') {
-      const anchors = owner?.anchors ?? chatSide.current?.anchors
-      chatSide.current = anchors ? { side: p.side, anchors } : null
-    }
+    // Both cards grow while open (chat lines; Details and nudge rows in the palette): each keeps
+    // the side it opened on and is capped to that side's room (its content scrolls), instead of
+    // being re-placed from its grown size.
+    const p = placeHeldPopover(anchor, size, box, floatSide.current?.side ?? null, 12, FLOAT_MARGIN)
+    const anchors = owner?.anchors ?? floatSide.current?.anchors
+    floatSide.current = kind && anchors ? { card: kind, side: p.side, anchors } : null
     setFloatPos((prev) => (prev && prev.x === p.x && prev.y === p.y && prev.side === p.side && prev.maxH === p.maxH ? prev : p))
-  }, [showFloat, chat, selectedId, overrides, canvasBox, floatSize, detailsOpen, device, snapshot])
+    // Everything the placement reads is in the key; the closure is from the render that changed it.
+  }, [placementKey])
 
-  // The palette (or chat) closing: a static copy of the last frame fades out for
-  // FLOAT_HIDE_MS. Switching palette ↔ chat swaps cards without a gap, so it is not a close.
+  // The palette (or chat) closing or standing aside for a drag: a static copy of the last frame
+  // fades out for FLOAT_HIDE_MS. Switching palette ↔ chat swaps cards without a gap, so it is not a close.
   const ghostRef = useRef<HTMLDivElement | null>(null)
   const shownCard = useRef<HTMLElement | null>(null)
   useLayoutEffect(() => {
     const card = (floatRef.current?.firstElementChild as HTMLElement | null | undefined) ?? null
+    const visible = card && !card.classList.contains(FLOAT_ASIDE_CLASS) ? card : null
     const prev = shownCard.current
-    shownCard.current = card
+    shownCard.current = visible
     const host = ghostRef.current
-    if (card || !prev || !host || prev.style.visibility === 'hidden') return
+    // `visibility: hidden` inline: a card not placed yet, never seen.
+    if (visible || !prev || !host || prev.style.visibility === 'hidden') return
     const ghost = prev.cloneNode(true) as HTMLElement
+    ghost.classList.remove(FLOAT_ASIDE_CLASS)
     ghost.classList.add('float__card--leaving')
     ghost.inert = true
     host.appendChild(ghost)
@@ -1186,10 +1254,7 @@ export function App() {
           <h2 className="pop__title">{t('stale.title')}</h2>
           <p className="pop__text">{t('stale.text', { count: refresh.failures })}</p>
           {state.captureError && <p className="pop__note mono">{state.captureError}</p>}
-          <button type="button" className="btn btn--icon" onClick={refresh.refreshNow} disabled={refresh.inflight || !state.online}>
-            <IconRefresh size={14} />
-            {refresh.inflight ? t('stale.capturing') : t('stale.refresh')}
-          </button>
+          <CaptureButton refresh={refresh} online={state.online} busy={t('stale.capturing')} idle={t('stale.refresh')} />
         </div>
       ),
     }
@@ -1202,10 +1267,7 @@ export function App() {
           <h2 className="pop__title">{t('frameError.title')}</h2>
           <p className="pop__text">{deviceFrame.src ? t('frameError.textStale') : t('frameError.textNone')}</p>
           <p className="pop__note mono">{deviceFrame.error.message || t('frameError.noDetails')}</p>
-          <button type="button" className="btn btn--icon" onClick={refresh.refreshNow} disabled={refresh.inflight || !state.online}>
-            <IconRefresh size={14} />
-            {refresh.inflight ? t('stale.capturing') : t('stale.refresh')}
-          </button>
+          <CaptureButton refresh={refresh} online={state.online} busy={t('stale.capturing')} idle={t('stale.refresh')} />
         </div>
       ),
     }
@@ -1274,91 +1336,160 @@ export function App() {
   const loading = webConnecting || (isAndroid && androidState === 'connecting' && state.online)
 
   // --- inbox data ---
-  const inboxItems: InboxItem[] = state.requests.map((r) => ({
-    request: r,
-    status: statuses.get(r.id) ?? 'work',
-    error: requestErrors.get(r.id)?.message || null,
-    unread: unread.has(r.id),
-  }))
-  const loose: LooseEntry[] = [
-    ...unownedMessages(state.chat, analysis).map((m) => ({ id: m.id, text: m.text, tone: 'note' as const, at: null })),
-    ...state.errors
-      // An error with a known request id is shown on that request's card.
-      .filter((e) => !(e.requestId && requestsById.has(e.requestId)))
-      .map((e) => ({ id: `err-${e.seq}`, text: e.message, tone: 'error' as const, at: e.at })),
-  ]
+  // Memoized: the header and the inbox are memoized and take these as props.
+  const inboxItems: InboxItem[] = useMemo(
+    () =>
+      state.requests.map((r) => ({
+        request: r,
+        status: statuses.get(r.id) ?? 'work',
+        error: requestErrors.get(r.id)?.message || null,
+        unread: unread.has(r.id),
+      })),
+    [state.requests, statuses, requestErrors, unread],
+  )
+  const loose: LooseEntry[] = useMemo(
+    () => [
+      ...unownedMessages(state.chat, analysis).map((m) => ({ id: m.id, text: m.text, tone: 'note' as const, at: null })),
+      ...state.errors
+        // An error with a known request id is shown on that request's card.
+        .filter((e) => !(e.requestId && requestsById.has(e.requestId)))
+        .map((e) => ({ id: `err-${e.seq}`, text: e.message, tone: 'error' as const, at: e.at })),
+    ],
+    [state.chat, analysis, state.errors, requestsById],
+  )
   const openCount = inboxItems.filter((i) => isOpen(i.status)).length
+  const inboxWorking = inboxItems.some((i) => i.status === 'work')
 
   // --- chat data ---
-  const chatRequests = chat?.kind === 'missing' ? requestsOf({ id: chat.request.node.id, anchors: chat.request.node.anchors }) : selectedRequests
-  const chatIds = chatRequests.map((r) => r.id)
-  const chatThread = chat ? threadFor(state.chat, analysis, chatIds) : []
-  const chatTargetNode = chat?.kind === 'missing' ? chat.request.node : chat ? selected : undefined
-  const chatMessages: ChatMessage[] = [...chatThread]
-  /** Window-made lines go after the last message of their requests (or at the end). */
-  const insertLine = (line: ChatMessage, requestIds: string[]) => {
-    let at = -1
-    chatMessages.forEach((m, i) => {
-      if (analysis.owners.get(m.id)?.some((id) => requestIds.includes(id))) at = i
-    })
-    chatMessages.splice(at === -1 ? chatMessages.length : at + 1, 0, line)
-  }
-  if (chatTargetNode) {
+  // Keyed by the element (`selectedKey`), not its node object: a recapture of the same screen
+  // re-renders nothing in the open chat.
+  const missingRequest = chat?.kind === 'missing' ? chat.request : null
+  const chatRequests = useMemo(
+    () => (missingRequest ? requestsOf({ id: missingRequest.node.id, anchors: missingRequest.node.anchors }) : selectedRequests),
+    [missingRequest, requestsOf, selectedRequests],
+  )
+  const chatOpen = Boolean(chat)
+  const chatThread = useMemo(
+    () => (chatOpen ? threadFor(state.chat, analysis, chatRequests.map((r) => r.id)) : []),
+    [chatOpen, state.chat, analysis, chatRequests],
+  )
+  const chatMessages: ChatMessage[] = useMemo(() => {
+    const lines: ChatMessage[] = [...chatThread]
+    const target = missingRequest ? missingRequest.node : chatOpen ? selectedNow.current : undefined
+    if (!target) return lines
+    /** Window-made lines go after the last message of their requests (or at the end). */
+    const insertLine = (line: ChatMessage, requestIds: string[]) => {
+      let at = -1
+      lines.forEach((m, i) => {
+        if (analysis.owners.get(m.id)?.some((id) => requestIds.includes(id))) at = i
+      })
+      lines.splice(at === -1 ? lines.length : at + 1, 0, line)
+    }
     for (const r of chatRequests) {
       const err = statuses.get(r.id) === 'error' ? requestErrors.get(r.id) : undefined
       if (err) insertLine({ id: `${ERROR_LINE_PREFIX}${r.id}`, role: 'system', text: err.message }, [r.id])
     }
     for (const n of notes) {
-      if (!sameElement({ id: n.nodeId, anchors: n.anchors }, chatTargetNode)) continue
+      if (!sameElement({ id: n.nodeId, anchors: n.anchors }, target)) continue
       insertLine({ id: n.id, role: 'system', text: t(n.key, n.count != null ? { count: n.count } : undefined) }, n.requestIds)
     }
-  }
-  const chatLocal = chat?.kind === 'node' && selected ? local.filter((m) => sameElement({ id: m.nodeId, anchors: m.anchors }, selected)) : []
-  const lastMsg = chatThread[chatThread.length - 1]
+    return lines
+    // `selectedKey` stands for the selected node read through `selectedNow`.
+  }, [chatOpen, chatThread, chatRequests, analysis, missingRequest, selectedKey, statuses, requestErrors, notes, t])
+  const chatLocal = useMemo(() => {
+    const node = selectedNow.current
+    return chat?.kind === 'node' && node ? local.filter((m) => sameElement({ id: m.nodeId, anchors: m.anchors }, node)) : []
+  }, [chat?.kind, selectedKey, local])
+  const lastThreadMsg = chatThread[chatThread.length - 1]
   const chatWorking =
-    chatRequests.some((r) => statuses.get(r.id) === 'work') && !(lastMsg?.role === 'assistant' && lastMsg.pending && lastMsg.text)
+    chatRequests.some((r) => statuses.get(r.id) === 'work') && !(lastThreadMsg?.role === 'assistant' && lastThreadMsg.pending && lastThreadMsg.text)
   // The server queues requests and hands them to the listening agent one at a time, so a
   // new message never has to wait for the previous one here.
-  const chatQueued = new Set(chatIds.filter((id) => statuses.get(id) === 'queued'))
-  const openAgentHelp = () => setPopover('agent')
+  const chatQueuedKey = chatRequests.filter((r) => statuses.get(r.id) === 'queued').map((r) => r.id).join('\u0000')
+  const chatQueued = useMemo(() => new Set(chatQueuedKey ? chatQueuedKey.split('\u0000') : []), [chatQueuedKey])
+  const openAgentHelp = useCallback(() => setPopover('agent'), [])
   const selectedOverride = selected ? overrides[selected.id] : undefined
   const attach = selectedOverride && snapshot ? describeOverride(selectedOverride, snapshot.pxPerUnit, '', t).trim() || null : null
 
   const meta = snapshot ? t('meta.layers', { count: Object.keys(snapshot.nodes).length }) : null
-  const deviceChip =
-    !isAndroid || androidState === 'no-device' || androidState === 'no-adb'
-      ? null
-      : { name: state.deviceModel ?? (state.device ? 'Android' : t('device.generic')), serial: state.device }
+  const deviceShown = isAndroid && androidState !== 'no-device' && androidState !== 'no-adb'
+  const deviceName = state.deviceModel ?? (state.device ? 'Android' : t('device.generic'))
+  // By value: every device snapshot brings a new `app` object with the same package.
+  const appPackage = state.app?.package ?? null
+  const appSource = state.app?.source ?? null
+  const deviceChip = useMemo(
+    () => (deviceShown ? { name: deviceName, serial: state.device, app: appPackage && appSource ? { package: appPackage, source: appSource } : null } : null),
+    [deviceShown, deviceName, state.device, appPackage, appSource],
+  )
+
+  // --- stable props for the memoized children ---
+  const pickInfo = useMemo(
+    () => ({ alt: picking, blocked: toolsBlocked, compact: learned && !isAndroid, mac: IS_MAC }),
+    [picking, toolsBlocked, learned, isAndroid],
+  )
+  const coachInfo = useMemo(() => (coachOpen ? { onClose: closeCoach } : null), [coachOpen, closeCoach])
+  const inboxInfo = useMemo(() => ({ open: openCount, working: inboxWorking, unread: unread.size > 0 }), [openCount, inboxWorking, unread])
+  const agentInfo = useMemo(() => (state.online ? { listening: state.listening } : null), [state.online, state.listening])
+  const onOpenUrl = useStableCallback(openUrl)
+  const onOpenFromInbox = useStableCallback(openFromInbox)
+  const onInboxToggle = useCallback((open: boolean) => setPopover(open ? 'inbox' : null), [])
+  const onAgentToggle = useCallback((open: boolean) => setPopover(open ? 'agent' : null), [])
+  const onStatusToggle = useCallback((open: boolean) => setPopover(open ? 'status' : null), [])
+  const inboxContent = useMemo(
+    () => <Inbox items={inboxItems} loose={loose} listening={state.listening} onOpen={onOpenFromInbox} onConnect={openAgentHelp} />,
+    [inboxItems, loose, state.listening, onOpenFromInbox, openAgentHelp],
+  )
+  const agentContent = useMemo(() => <AgentPopoverBody listening={state.listening} />, [state.listening])
+  const overlayOffset = useMemo(() => ({ x: device.x, y: device.y }), [device.x, device.y])
+  const selectedNodeId = selected?.id ?? null
+  const overlayUnread = useMemo(
+    () => (chat?.kind === 'node' && selectedNodeId ? new Set([...unreadNodes].filter((id) => id !== selectedNodeId)) : unreadNodes),
+    [chat?.kind, selectedNodeId, unreadNodes],
+  )
+  const onChatSend = useStableCallback(sendMessage)
+  const onChatBack = useStableCallback(closeChatToPalette)
+  const onMissingChatClose = useCallback(() => setChat(null), [])
+  const onChatClose = useCallback(() => {
+    setChat(null)
+    setFocusRequest({ row: 'chat', nonce: Date.now() })
+  }, [])
+  const noSend = useCallback(() => {}, [])
+  const onPaletteSend = useStableCallback(sendFromPalette)
+  const onLeaveField = useCallback(() => canvasRef.current?.focus({ preventScroll: true }), [])
+  const onOpenChat = useStableCallback(openChat)
+  const onDeselect = useCallback(() => selectNode(null), [selectNode])
+  const onToggleNudge = useCallback((kind: NudgeKind) => setNudge((v) => (v === kind ? null : kind)), [])
+  const onToggleHidden = useStableCallback(toggleHidden)
+  const onClearSelectedOverride = useStableCallback(() => {
+    if (selected) clearOverride(selected.id)
+  })
+  const onStopWaiting = useStableCallback(stopWaiting)
+  const onToggleDetails = useCallback(() => setDetailsOpen((v) => !v), [])
 
   const suggestions = [...new Set(['http://localhost:5173', 'http://localhost:3000', state.targetUrl ?? ''].filter(Boolean))]
 
   return (
     <div className="app">
       <Header
-        pick={{
-          alt: picking,
-          blocked: toolsBlocked,
-          compact: learned && !isAndroid,
-          mac: IS_MAC,
-        }}
-        coach={coachOpen ? { onClose: closeCoach } : null}
+        pick={pickInfo}
+        coach={coachInfo}
         t={t}
         target={isAndroid ? 'android' : 'web'}
         urlDraft={urlDraft}
         onUrlDraft={setUrlDraft}
-        onOpenUrl={openUrl}
+        onOpenUrl={onOpenUrl}
         device={deviceChip}
-        inbox={{ open: openCount, working: inboxItems.some((i) => i.status === 'work'), unread: unread.size > 0 }}
+        inbox={inboxInfo}
         inboxOpen={popover === 'inbox'}
-        onInboxToggle={(open) => setPopover(open ? 'inbox' : null)}
-        inboxContent={<Inbox items={inboxItems} loose={loose} listening={state.listening} onOpen={openFromInbox} onConnect={openAgentHelp} />}
-        agent={state.online ? { listening: state.listening } : null}
+        onInboxToggle={onInboxToggle}
+        inboxContent={inboxContent}
+        agent={agentInfo}
         agentOpen={popover === 'agent' && state.online}
-        onAgentToggle={(open) => setPopover(open ? 'agent' : null)}
-        agentContent={<AgentPopoverBody listening={state.listening} />}
+        onAgentToggle={onAgentToggle}
+        agentContent={agentContent}
         status={status}
         statusOpen={popover === 'status'}
-        onStatusToggle={(open) => setPopover(open ? 'status' : null)}
+        onStatusToggle={onStatusToggle}
         meta={meta}
         loading={loading}
       />
@@ -1401,10 +1532,7 @@ export function App() {
                 <li>{rich('deviceError.step2', { env: <code>LD_DEVICE</code> })}</li>
                 <li>{t('noAgent.step3')}</li>
               </ol>
-              <button type="button" className="btn btn--icon" onClick={refresh.refreshNow} disabled={refresh.inflight || !state.online}>
-                <IconRefresh size={14} />
-                {refresh.inflight ? t('android.checking') : t('android.checkAgain')}
-              </button>
+              <CaptureButton refresh={refresh} online={state.online} busy={t('android.checking')} idle={t('android.checkAgain')} />
             </Blank>
           ) : androidState === 'no-device' || androidState === 'no-adb' ? (
             <Blank icon={<IconSmartphone size={18} />} title={androidState === 'no-adb' ? t('android.noAdbTitle') : t('android.noDeviceTitle')}>
@@ -1416,10 +1544,7 @@ export function App() {
                 <li>{rich('android.step2', { cmd: <code>adb devices</code> })}</li>
                 <li>{t('android.step3')}</li>
               </ol>
-              <button type="button" className="btn btn--icon" onClick={refresh.refreshNow} disabled={refresh.inflight || !state.online}>
-                <IconRefresh size={14} />
-                {refresh.inflight ? t('android.checking') : t('android.checkAgain')}
-              </button>
+              <CaptureButton refresh={refresh} online={state.online} busy={t('android.checking')} idle={t('android.checkAgain')} />
             </Blank>
           ) : (
             <Blank icon={<IconSmartphone size={18} />} title={androidState === 'no-agent' ? t('android.waitingTitle') : t('android.connectingTitle')}>
@@ -1427,10 +1552,7 @@ export function App() {
                 {androidState === 'no-agent' ? t('android.waitingText') : t('android.connectingText')}
               </p>
               {androidState === 'no-agent' && (
-                <button type="button" className="btn btn--icon" onClick={refresh.refreshNow} disabled={refresh.inflight || !state.online}>
-                  <IconRefresh size={14} />
-                  {refresh.inflight ? t('android.checking') : t('android.checkAgain')}
-                </button>
+                <CaptureButton refresh={refresh} online={state.online} busy={t('android.checking')} idle={t('android.checkAgain')} />
               )}
             </Blank>
           )
@@ -1487,16 +1609,16 @@ export function App() {
           <Overlay
             snapshot={snapshot}
             overrides={overrides}
-            selectedId={selectedId}
+            selectedId={selected?.id ?? null}
             alt={alt.down}
             clickSelects={isAndroid}
             canTweak={!tweakBlocked}
             scale={device.scale}
-            offset={{ x: device.x, y: device.y }}
+            offset={overlayOffset}
             canvasWidth={canvasBox.w}
             marks={marks}
             originGhosts={isAndroid ? originGhosts : undefined}
-            unread={chat?.kind === 'node' && selected ? new Set([...unreadNodes].filter((id) => id !== selected.id)) : unreadNodes}
+            unread={overlayUnread}
             selectedWorking={selectedWorking}
             stale={stale}
             onDragChange={setDragging}
@@ -1516,7 +1638,7 @@ export function App() {
         <div className={`float${floatStale ? ' float--stale' : ''}`} ref={floatRef}>
           {showFloat && chat?.kind === 'missing' && (
             <div
-              className="float__card float__card--chat side-corner"
+              className={`float__card float__card--chat side-corner${floatAside ? ` ${FLOAT_ASIDE_CLASS}` : ''}`}
               style={floatPos ? { left: floatPos.x, top: floatPos.y, maxHeight: Math.min(480, canvasBox.h - 24) } : { visibility: 'hidden' }}
             >
               <ChatPopover
@@ -1533,23 +1655,23 @@ export function App() {
                 online={state.online}
                 working={chatWorking}
                 attach={null}
-                onSend={() => {}}
+                onSend={noSend}
                 onConnect={openAgentHelp}
-                onBack={closeChatToPalette}
-                onClose={() => setChat(null)}
+                onBack={onChatBack}
+                onClose={onMissingChatClose}
               />
             </div>
           )}
           {showFloat && chat?.kind !== 'missing' && selected && snapshot && (
             <div
-              className={`float__card float__card--${chat ? 'chat' : 'palette'} side-${floatPos?.side ?? 'right'}`}
+              className={`float__card float__card--${chat ? 'chat' : 'palette'} side-${floatPos?.side ?? 'right'}${floatAside ? ` ${FLOAT_ASIDE_CLASS}` : ''}`}
               key={chat ? 'chat' : 'palette'}
               style={
                 floatPos
                   ? {
                       left: floatPos.x,
                       top: floatPos.y,
-                      maxHeight: chat ? Math.min(480, floatPos.maxH ?? canvasBox.h - 24) : canvasBox.h - 24,
+                      maxHeight: chat ? Math.min(480, floatPos.maxH ?? canvasBox.h - 24) : (floatPos.maxH ?? canvasBox.h - 24),
                     }
                   : { visibility: 'hidden' }
               }
@@ -1569,13 +1691,10 @@ export function App() {
                   online={state.online}
                   working={chatWorking}
                   attach={attach}
-                  onSend={sendMessage}
+                  onSend={onChatSend}
                   onConnect={openAgentHelp}
-                  onBack={closeChatToPalette}
-                  onClose={() => {
-                    setChat(null)
-                    setFocusRequest({ row: 'chat', nonce: Date.now() })
-                  }}
+                  onBack={onChatBack}
+                  onClose={onChatClose}
                 />
               ) : (
                 <ActionPalette
@@ -1594,17 +1713,17 @@ export function App() {
                   sendBlocked={!state.online ? t('chat.offline') : null}
                   offline={!state.online}
                   onDraftChange={setPaletteDraft}
-                  onSend={sendFromPalette}
-                  onLeaveField={() => canvasRef.current?.focus({ preventScroll: true })}
+                  onSend={onPaletteSend}
+                  onLeaveField={onLeaveField}
                   onSelect={selectNode}
-                  onOpenChat={openChat}
-                  onDeselect={() => selectNode(null)}
-                  onToggleNudge={(kind) => setNudge((v) => (v === kind ? null : kind))}
+                  onOpenChat={onOpenChat}
+                  onDeselect={onDeselect}
+                  onToggleNudge={onToggleNudge}
                   onNudge={nudgeBy}
-                  onToggleHidden={toggleHidden}
-                  onClearOverride={() => clearOverride(selected.id)}
-                  onStopWaiting={stopWaiting}
-                  onToggleDetails={() => setDetailsOpen((v) => !v)}
+                  onToggleHidden={onToggleHidden}
+                  onClearOverride={onClearSelectedOverride}
+                  onStopWaiting={onStopWaiting}
+                  onToggleDetails={onToggleDetails}
                 />
               )}
             </div>

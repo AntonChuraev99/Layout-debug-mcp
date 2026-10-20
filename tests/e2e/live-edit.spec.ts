@@ -69,7 +69,7 @@ test('4c after a move, a child of the moved element is picked and boxed where it
   // The page moves the whole subtree (`translate` on the parent), so the children
   // must be found and outlined at the new place, not where the snapshot measured them.
   await openWindow(page)
-  const pro = frameOf(page).locator('.row', { hasText: 'Тариф' }).locator('span', { hasText: 'Pro' })
+  const pro = frameOf(page).locator('.row', { hasText: 'Plan' }).locator('span', { hasText: 'Pro' })
   const before = await centerOf(pro)
   await selectInFrame(page, pro)
   await expect(palette(page)).toHaveAccessibleName(/^Actions: span span "Pro"/)
@@ -82,7 +82,7 @@ test('4c after a move, a child of the moved element is picked and boxed where it
   await page.mouse.down()
   await page.mouse.move(row!.x + 40 + 120, row!.y + row!.height / 2 + 30, { steps: 8 })
   await page.mouse.up()
-  const row0 = frameOf(page).locator('.row', { hasText: 'Тариф' })
+  const row0 = frameOf(page).locator('.row', { hasText: 'Plan' })
   await expect.poll(() => row0.evaluate((el) => (el as HTMLElement).style.translate)).toBe('120px 30px')
   await clearSelection(page)
 
@@ -115,7 +115,7 @@ test('4d a moved element leaves a faint ghost on its old place; Reset takes it a
   expectSameBox(await ghost.boundingBox(), c.box)
   expect(await ghost.evaluate((el) => Number(getComputedStyle(el).opacity))).toBeLessThan(0.3)
   expect(await ghost.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none')
-  await expect(ghost, 'the ghost reads like the element').toHaveText('Продолжить')
+  await expect(ghost, 'the ghost reads like the element').toHaveText('Continue')
   // It is nobody's element: no test id, never a layer of the snapshot.
   await expect(frameOf(page).getByTestId('cta-continue')).toHaveCount(1)
   const since = Date.now()
@@ -129,7 +129,7 @@ test('4d a moved element leaves a faint ghost on its old place; Reset takes it a
   await expect.poll(() => cta.evaluate((el) => (el as HTMLElement).style.translate)).toBe('')
 
   // A size change moves nothing away from its place: no ghost.
-  await resizeBy(page, frameOf(page).getByRole('heading', { name: 'Годовая подписка' }), 30, 10)
+  await resizeBy(page, frameOf(page).getByRole('heading', { name: 'Annual plan' }), 30, 10)
   await expect(ghost).toHaveCount(0)
 })
 
@@ -208,7 +208,7 @@ async function resizeBy(page: Page, element: Locator, dx: number, dy: number): P
 test('5 the resize handle changes the real width and height', async ({ page }) => {
   await openWindow(page)
   // A plain block: resizing it moves nothing around it, so the box must match exactly.
-  const title = frameOf(page).getByRole('heading', { name: 'Годовая подписка' })
+  const title = frameOf(page).getByRole('heading', { name: 'Annual plan' })
   const { w, h } = await resizeBy(page, title, 30, 10)
   const after = (await title.boundingBox())!
   expect(Math.abs(after.width - w), 'real width follows the handle').toBeLessThanOrEqual(1)
@@ -217,9 +217,9 @@ test('5 the resize handle changes the real width and height', async ({ page }) =
 })
 
 test('5c after a resize that reflows its row, the selection box stays on the real element', async ({ page }) => {
-  // "Отмена" sits right of a `flex: 1` button: growing it moves its left edge in the page.
+  // "Cancel" sits right of a `flex: 1` button: growing it moves its left edge in the page.
   await openWindow(page)
-  const cancel = frameOf(page).getByRole('button', { name: 'Отмена' })
+  const cancel = frameOf(page).getByRole('button', { name: 'Cancel' })
   const { w, h } = await resizeBy(page, cancel, 30, 10)
   const after = (await cancel.boundingBox())!
   expect(Math.abs(after.width - w), 'real width follows the handle').toBeLessThanOrEqual(1)
@@ -239,7 +239,7 @@ test('5b resizing a flex: 1 item changes its real width, not only the overlay bo
 
 test('5d the top-left handle sizes from its own corner: the bottom-right one stays put', async ({ page }) => {
   await openWindow(page)
-  const title = frameOf(page).getByRole('heading', { name: 'Годовая подписка' })
+  const title = frameOf(page).getByRole('heading', { name: 'Annual plan' })
   await selectInFrame(page, title)
   const before = (await centerOf(title)).box
   const tl = await centerOf(page.locator('.overlay [data-handle="tl"]'))

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import type { EditRequest, LayoutNode, Snapshot } from '../shared/protocol.ts'
 import {
+  appLine,
   CAPS,
   cap,
   compactTree,
@@ -194,6 +195,34 @@ describe('compactTree (layout_snapshot)', () => {
     const s = snap({}, 'missing') as Partial<Snapshot>
     delete s.viewport
     assert.match(compactTree(s as Snapshot, 8), /viewport unknown/)
+  })
+
+  test('the Android app goes first inside the marked block; without one the block is the tree only', () => {
+    const nodes = { r: node('r') }
+    const withApp = compactTree({ ...snap(nodes), app: { package: 'com.example.app', pid: 42, source: 'agent' } }, 3)
+    assert.equal(blockOf(withApp)[0], 'app: "com.example.app" (pid 42, reported by the on-device agent)')
+    assert.ok(!/app:/.test(compactTree(snap(nodes), 3)))
+  })
+})
+
+describe('appLine', () => {
+  test('agent-reported, adb-confirmed, none', () => {
+    assert.equal(appLine({ package: 'com.example.app', pid: null, source: 'agent' }), 'app: "com.example.app" (reported by the on-device agent)')
+    assert.equal(
+      appLine({ package: 'com.example.app', pid: 7, source: 'adb' }),
+      'app: "com.example.app" (pid 7, the on-device agent did not report its package; adb only confirmed this app is running)',
+    )
+    assert.equal(appLine(null), null)
+    assert.equal(appLine(undefined), null)
+  })
+  test('a hostile package value stays on its line and is capped', () => {
+    const line = appLine({ package: `${INJECTION}${'x'.repeat(400)}`, pid: null, source: 'agent' })!
+    assert.ok(!line.includes('\n'))
+    assert.ok(line.length < 330)
+  })
+  test('selected_element puts it first in the block', () => {
+    const text = describeNode(node('n'), [], 'dp', 2, [], { package: 'com.example.app', pid: null, source: 'agent' })
+    assert.match(blockOf(text)[0]!, /^app: "com\.example\.app"/)
   })
 })
 

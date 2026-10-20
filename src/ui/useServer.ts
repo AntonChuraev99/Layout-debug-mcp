@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
+  AndroidApp,
   ChatMessage,
   EditRequest,
   ErrorCode,
@@ -51,6 +52,11 @@ export interface ServerState {
   device: string | null
   /** `ro.product.model` of the device, e.g. "Pixel 8"; null on web or when adb cannot tell. */
   deviceModel: string | null
+  /**
+   * Android: the app the on-device agent belongs to, from the latest device snapshot;
+   * null on web, before the first frame, or when neither the agent nor adb could tell.
+   */
+  app: AndroidApp | null
   chat: ChatMessage[]
   requests: EditRequest[]
   /** Status the server reported per request; empty with a server that does not report it. */
@@ -87,6 +93,7 @@ export function useServer(locale: Locale) {
     targetUrl: null,
     device: null,
     deviceModel: null,
+    app: null,
     chat: [],
     requests: [],
     statuses: new Map(),
@@ -159,6 +166,7 @@ export function useServer(locale: Locale) {
                 ...s,
                 androidSnapshot: msg.snapshot,
                 androidFrame: msg.frame,
+                app: msg.snapshot.app ?? null,
                 // Only the capture failure is answered by a fresh frame. A general error
                 // (a live edit the device refused, a reset that failed) stays until the user
                 // dismisses it or the next action: Android re-captures every 800 ms, which
@@ -166,6 +174,8 @@ export function useServer(locale: Locale) {
                 captureError: null,
                 captureCode: null,
               }
+            case 'deviceModel':
+              return s.deviceModel === msg.deviceModel ? s : { ...s, deviceModel: msg.deviceModel }
             case 'agentStatus':
               return s.listening === msg.listening ? s : { ...s, listening: msg.listening }
             case 'chat': {
@@ -173,6 +183,8 @@ export function useServer(locale: Locale) {
               const chat = idx === -1 ? [...s.chat, msg.message] : s.chat.map((m, i) => (i === idx ? msg.message : m))
               return { ...s, chat }
             }
+            case 'chatCleared':
+              return s.chat.length ? { ...s, chat: [] } : s
             case 'requests':
               return {
                 ...s,

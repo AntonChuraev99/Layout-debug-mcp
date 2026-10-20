@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import type { EditRequest } from '../shared/protocol.ts'
 import { IconCheck, IconCircleX, IconInbox, IconPlug, Spinner } from './icons.tsx'
 import { formatAgo, useT, type MsgKey } from './i18n.ts'
@@ -31,7 +31,7 @@ interface Props {
 
 const DONE_SHOWN = 5
 
-export function Inbox({ items, loose, listening, onOpen, onConnect }: Props) {
+export const Inbox = memo(function Inbox({ items, loose, listening, onOpen, onConnect }: Props) {
   const { t, locale } = useT()
   const [filter, setFilter] = useState<'active' | 'all'>('active')
   const [allDone, setAllDone] = useState(false)
@@ -53,6 +53,7 @@ export function Inbox({ items, loose, listening, onOpen, onConnect }: Props) {
   const anyWaiting = !listening && items.some((i) => i.status === 'queued')
   const doneShown = allDone ? finished : finished.slice(0, DONE_SHOWN)
   const nothing = items.length === 0 && loose.length === 0
+  const clear = useClearChat()
 
   return (
     <div className="inbox">
@@ -66,6 +67,35 @@ export function Inbox({ items, loose, listening, onOpen, onConnect }: Props) {
             {t('inbox.all')}
           </button>
         </div>
+      </div>
+
+      <div className="inbox__chat">
+        {clear.state === 'confirm' ? (
+          <>
+            <span className="inbox__chat-text">{t('inbox.clearChatConfirm')}</span>
+            <button type="button" className="link-btn" onClick={clear.run}>
+              {t('inbox.clearChatYes')}
+            </button>
+            <button type="button" className="link-btn" onClick={clear.cancel}>
+              {t('inbox.clearChatNo')}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="link-btn"
+            title={t('inbox.clearChatHint')}
+            disabled={clear.state === 'busy'}
+            onClick={clear.ask}
+          >
+            {t('inbox.clearChat')}
+          </button>
+        )}
+        {clear.error && (
+          <span className="inbox__chat-error" role="alert">
+            {t('inbox.clearChatFailed', { reason: clear.error })}
+          </span>
+        )}
       </div>
 
       {anyWaiting && (
@@ -131,6 +161,33 @@ export function Inbox({ items, loose, listening, onOpen, onConnect }: Props) {
       </div>
     </div>
   )
+})
+
+/**
+ * "Clear chat": asks once, then `DELETE /api/chat`. The server broadcasts `chatCleared`,
+ * so this window and every other one drop the thread from the same event. A failure
+ * stays visible next to the button with the server's reason.
+ */
+function useClearChat() {
+  const [state, setState] = useState<'idle' | 'confirm' | 'busy'>('idle')
+  const [error, setError] = useState<string | null>(null)
+  const ask = () => {
+    setError(null)
+    setState('confirm')
+  }
+  const cancel = () => setState('idle')
+  const run = () => {
+    setState('busy')
+    fetch('/api/chat', { method: 'DELETE', cache: 'no-store' })
+      .then(async (res) => {
+        if (res.ok) return setError(null)
+        const body = (await res.json().catch(() => null)) as { error?: unknown } | null
+        setError(typeof body?.error === 'string' ? body.error : `HTTP ${res.status}`)
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setState('idle'))
+  }
+  return { state, error, ask, cancel, run }
 }
 
 function Card({ item, now, listening, onOpen }: { item: InboxItem; now: number; listening: boolean; onOpen: (r: EditRequest) => void }) {

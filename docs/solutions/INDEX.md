@@ -2,6 +2,7 @@
 
 | date | category | keywords | path |
 |---|---|---|---|
+| 2026-10-19 | solution | android, node-id, remount, elementKey, single-flight, frame-cache, adb-stall, device_unresponsive, reload-hold | [Android live session: lag, lost chat state, misleading "app is silent"](android-live-session-lag-and-state-loss-2026-10-19.md) |
 | 2026-10-08 | decision | telemetry, amplitude, opt-out, DO_NOT_TRACK, privacy, analytics | [Anonymous opt-out telemetry over Amplitude HTTP](../decisions/anonymous-telemetry-2026-10-08.md) |
 | 2026-10-08 | decision | mcp, long-poll, wait_for_message, open_window, npx, agent-agnostic | [MCP as the only agent entry, with listen mode](../decisions/mcp-only-listen-mode-2026-10-08.md) |
 | 2026-10-07 | solution | translate-subtree, inheritedShifts, hit-test, ghost-copy, pointerleave, alt-pick | [Moved element: child boxes, the ghost copy, pointer position on Alt](moved-subtree-boxes-and-ghost-2026-10-07.md) |

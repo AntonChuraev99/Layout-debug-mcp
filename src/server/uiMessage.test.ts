@@ -99,6 +99,7 @@ describe('parseUiMessage: accepts every valid frame', () => {
     { t: 'overrides', overrides: [override, { ...override, width: 10, height: 20, hidden: true }] },
     { t: 'submit', comment: 'wider' },
     { t: 'clearRequests' },
+    { t: 'clearChat' },
     { t: 'androidCapture' },
     { t: 'androidOverride', override },
     { t: 'androidClearOverrides' },

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: an element the page renders anew</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 40px; background: #f4f5f7; font: 15px/1.5 system-ui, sans-serif; }
+      .card { width: 320px; padding: 20px; background: #fff; border-radius: 12px; }
+    </style>
+  </head>
+  <body>
+    <section class="card" data-testid="live-card">
+      <h2>Live card</h2>
+      <p>Rendered anew every 600 ms.</p>
+    </section>
+    <script>
+      // What a framework re-render, a keyed list or hot reload does to the DOM: the element
+      // is replaced by an equal one. The inspector gives the new element a new node id.
+      window.__renders = 0
+      setInterval(() => {
+        const el = document.querySelector('[data-testid="live-card"]')
+        el.replaceWith(el.cloneNode(true))
+        window.__renders++
+      }, 600)
+    </script>
+    __INSPECTOR__
+  </body>
+</html>

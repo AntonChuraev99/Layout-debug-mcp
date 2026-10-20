@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { LayoutNode, NodeId, Override, Snapshot } from '../shared/protocol.ts'
 import {
   IconArrowUp,
@@ -21,6 +21,7 @@ import {
 import { useT, type MsgKey } from './i18n.ts'
 import { NodeDetails, ancestorsOf } from './NodeDetails.tsx'
 import type { ArrowKey, NudgeKind } from './pick.ts'
+import { elementKey } from './selection.ts'
 import { bestAnchor, displayLabel } from './thread.ts'
 
 const CRUMBS_SHOWN = 3
@@ -75,7 +76,7 @@ interface Props {
 
 type CopyState = { kind: 'idle' } | { kind: 'ok' } | { kind: 'fail'; reason: string }
 
-export function ActionPalette(props: Props) {
+export const ActionPalette = memo(function ActionPalette(props: Props) {
   const { snapshot, node, override: ov } = props
   const { t, quotes } = useT()
   const chain = ancestorsOf(snapshot, node.id)
@@ -100,18 +101,21 @@ export function ActionPalette(props: Props) {
     ;(props.nudgeExit.kind === 'move' ? moveRowRef : resizeRowRef).current?.focus()
   }, [props.nudgeExit])
 
-  // A new node starts clean: no "copied", short breadcrumb.
+  // A new element starts clean: no "copied", short breadcrumb. The same element under a new
+  // node id (a device recapture, a page re-render) is not a new element.
+  const element = elementKey(node)
   useEffect(() => {
     setCopy({ kind: 'idle' })
     setAllCrumbs(false)
     return () => window.clearTimeout(copyTimer.current)
-  }, [node.id])
+  }, [element])
 
   useEffect(() => {
     if (!props.focusRequest) return
     if (props.focusRequest.row === 'chat') {
       const field = fieldRef.current
-      field?.focus()
+      // The field heads the card: it is in view wherever the card stands, nothing has to scroll.
+      field?.focus({ preventScroll: true })
       // Back to a draft: the caret goes after it, ready to go on typing.
       field?.setSelectionRange(field.value.length, field.value.length)
     }
@@ -188,7 +192,8 @@ export function ActionPalette(props: Props) {
       >
         <IconX size={14} />
       </button>
-      <div className="palette__body" key={node.id}>
+      {/* Keyed by the element, not its node id: a recapture must not rebuild the field under the caret. */}
+      <div className="palette__body" key={element}>
         {chain.length > 0 && (
           <nav className={`crumbs${allCrumbs ? ' crumbs--all' : ''}`} aria-label={t('palette.parents')}>
             {!allCrumbs && chain.length > CRUMBS_SHOWN && (
@@ -305,7 +310,7 @@ export function ActionPalette(props: Props) {
       </div>
     </div>
   )
-}
+})
 
 /**
  * `div.card` reads better than a bare `div`; Compose names are already specific.

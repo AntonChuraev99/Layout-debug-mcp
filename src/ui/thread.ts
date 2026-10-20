@@ -132,7 +132,7 @@ export function analyzeChat(chat: ChatMessage[], requests: EditRequest[]): ChatA
  * - `work`     — an agent took it (wait_for_message or pending_requests) and has not replied;
  * - `done`     — the agent answered;
  * - `error`    — the agent's run failed (the server says why);
- * - `dismissed`— the user stopped waiting ("Не ждать агента");
+ * - `dismissed`— the user stopped waiting ("Stop waiting for the agent");
  * - `stale`    — taken before this window opened and never answered: no live evidence
  *                that anyone still works on it, so it is not shown as in progress.
  */
@@ -288,7 +288,7 @@ export function fmtSigned(n: number): string {
 
 /**
  * The part of a node label worth showing next to its kind. The web inspector writes
- * `h2 "Вторая карточка"` or `div.card`; Android writes the text or repeats the kind.
+ * `h2 "Second card"` or `div.card`; Android writes the text or repeats the kind.
  * Text is wrapped in the window language's quotes.
  */
 export function displayLabel(kind: string, label: string, quotes: readonly [string, string] = ['«', '»']): string {

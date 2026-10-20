@@ -1,5 +1,5 @@
 /**
- * Pure rules of the single-mode window (DESIGN_SPEC "один режим"): which layer an Alt
+ * Pure rules of the single-mode window (DESIGN_SPEC "single mode"): which layer an Alt
  * pick lands on, how the wheel walks the parent chain, when a layer counts as "large",
  * how corner handles and arrow keys turn into an override, and what Escape closes.
  *
@@ -275,7 +275,7 @@ export function nudgeOverride(
   }
 }
 
-/** What Escape closes, in this order (DESIGN_SPEC §4 "Порядок Esc"); null — nothing. */
+/** What Escape closes, in this order (DESIGN_SPEC §4 "Esc order"); null — nothing. */
 export type EscapeStep = 'coach' | 'chat' | 'details' | 'nudge' | 'selection'
 
 export function escapeStep(s: {

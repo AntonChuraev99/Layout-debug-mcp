@@ -194,6 +194,16 @@ export class Session {
   clearRequests() {
     this.requests = []
   }
+
+  /**
+   * Empties the chat history. Requests stay: they are the queue, not the thread.
+   * Returns how many messages were dropped.
+   */
+  clearChat(): number {
+    const count = this.chat.length
+    this.chat = []
+    return count
+  }
 }
 
 export function formatRect(r: Rect, unit: string): string {

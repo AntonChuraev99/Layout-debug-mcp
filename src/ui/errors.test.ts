@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import type { ErrorCode } from '../shared/protocol.ts'
+import { DEVICE_ERROR_CODES, type ErrorCode } from '../shared/protocol.ts'
 import { androidStateFor, errorRoute, rejectsSubmit, resolveRequestErrors } from './errors.ts'
 
 const ALL: ErrorCode[] = [
@@ -10,6 +10,8 @@ const ALL: ErrorCode[] = [
   'device_no_adb',
   'device_not_found',
   'device_no_bridge',
+  'device_unresponsive',
+  'device_wrong_app',
   'device',
   'live_edit',
   'reset_edits',
@@ -18,7 +20,7 @@ const ALL: ErrorCode[] = [
 
 describe('errorRoute', () => {
   test('every device capture code goes to the connect state', () => {
-    for (const c of ['device_no_adb', 'device_not_found', 'device_no_bridge', 'device', 'screenshot'] as const) {
+    for (const c of ['device_no_adb', 'device_not_found', 'device_no_bridge', 'device_unresponsive', 'device_wrong_app', 'device', 'screenshot'] as const) {
       assert.equal(errorRoute(c, undefined), 'capture', c)
     }
   })
@@ -33,6 +35,10 @@ describe('errorRoute', () => {
       assert.equal(errorRoute(c, undefined), 'general', c)
     }
     assert.equal(errorRoute(undefined, undefined), 'general')
+  })
+
+  test('ALL lists every device capture code the protocol has', () => {
+    for (const c of DEVICE_ERROR_CODES) assert.ok(ALL.includes(c), c)
   })
 
   test('the routing does not depend on the localized text: every code has exactly one route', () => {
@@ -65,6 +71,10 @@ describe('androidStateFor', () => {
     assert.equal(androidStateFor('device'), 'device-error')
     assert.equal(androidStateFor('screenshot'), 'device-error')
     assert.equal(androidStateFor('live_edit'), 'device-error')
+    // Another app holds the agent port: its own text names both apps and the fix.
+    assert.equal(androidStateFor('device_wrong_app'), 'device-error')
+    // adb lists the device but its link is stalled: the bridge steps ("start the app") would be false.
+    assert.equal(androidStateFor('device_unresponsive'), 'device-error')
   })
 })
 
