@@ -44,6 +44,7 @@ The core is a **normalized snapshot**: both adapters return the same format, so 
 - `src/ui/` — the window (Vite + React): frame (iframe or device screenshot), SVG overlay, action palette, element chat, Inbox.
 - `src/inspector/` — the script injected into the web target: DOM snapshot, live edits via inline styles, ghost copy.
 - `src/mcp/` — stdio MCP server: `layout_snapshot`, `selected_element`, `pending_requests`, `reply_in_window`.
+- `src/plugins/` — dev-only `data-source-loc` plugins for the user's build, published as `layout-debug-mcp/vite` and `layout-debug-mcp/babel` (`@babel/core` is an optional peer, never a runtime dependency of the MCP path).
 - `src/shared/` — protocol types, ports.
 - `demo/` — a bundled demo page; `tests/e2e/` — Playwright suite driving the window and a real MCP client.
 

@@ -26,7 +26,7 @@ Ports are overridable: `LD_UI_PORT` (dev window, default 5174) and `LD_SERVER_PO
 | `npm run mcp` | MCP stdio server (normally started by your MCP client) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run typecheck:e2e` | Type check of the e2e suite |
-| `npm run build` | Inspector bundle + UI + Node entries (`dist/cli.js`, `dist/server`, `dist/mcp`) |
+| `npm run build` | Inspector bundle + UI + Node entries (`dist/cli.js`, `dist/server`, `dist/mcp`) + the build plugins (`dist/plugins/vite.js`, `babel.js`, `babel.cjs` and their `.d.ts`) |
 | `npm test` | Unit tests (`node:test`) |
 | `npm run test:e2e` | Playwright e2e suite (window + real MCP stdio client) |
 
@@ -40,6 +40,7 @@ src/inspector/           script inside the target page: DOM walk + live override
 src/ui/                  React window: iframe / device frame, overlay, selection, drag, chat
 src/server/              Node: session state, request queue and long-poll, WebSocket, adb adapter, static window
 src/mcp/                 stdio MCP server over the server's local HTTP API; starts the server on open_window
+src/plugins/             dev-only data-source-loc plugins for the user's build: `layout-debug-mcp/vite`, `layout-debug-mcp/babel`
 src/cli.ts               the package bin: MCP server by default, `window` for the server in the foreground
 demo/                    page for trying the tool without setup
 ```
