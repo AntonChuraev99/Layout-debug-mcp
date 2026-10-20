@@ -91,12 +91,15 @@ jobs:
           echo "::error::layout-debug-mcp@$VERSION did not appear on npm within 10 minutes"
           exit 1
 
+      # A pre-release (1.2.3-rc.1) goes to npm under "next" only; the MCP Registry gets stable versions.
       - name: Install mcp-publisher
+        if: ${{ !contains(github.ref_name, '-') }}
         run: |
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
           ./mcp-publisher --version
 
       - name: Set server.json version from the tag
+        if: ${{ !contains(github.ref_name, '-') }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           jq --arg v "$VERSION" '.version = $v | .packages[].version = $v' server.json > server.tmp
@@ -104,7 +107,9 @@ jobs:
           cat server.json
 
       - name: Log in to the MCP Registry
+        if: ${{ !contains(github.ref_name, '-') }}
         run: ./mcp-publisher login github-oidc
 
       - name: Publish to the MCP Registry
+        if: ${{ !contains(github.ref_name, '-') }}
         run: ./mcp-publisher publish
