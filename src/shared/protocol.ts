@@ -61,6 +61,11 @@ export interface LayoutNode {
 
 export interface Snapshot {
   id: string
+  /**
+   * Web: the document the inspector runs in (random per page load). Node ids start over in
+   * every document, so a new `docId` is a new page even when it arrives before the frame's `load`.
+   */
+  docId?: string
   target: TargetKind
   createdAt: number
   /** The unit an agent should write into code: css-px on web, dp on Android. */
@@ -92,8 +97,8 @@ export interface AndroidApp {
 }
 
 /**
- * A live, in-memory tweak. Never written to disk, never survives a reload —
- * turning one into real code is what the agent is for.
+ * A live, in-memory tweak of one element. Never written to disk; the window puts it back
+ * after a reload through `LiveEdit` — turning one into real code is what the agent is for.
  */
 export interface Override {
   nodeId: NodeId
@@ -102,6 +107,31 @@ export interface Override {
   width?: number
   height?: number
   hidden?: boolean
+}
+
+/**
+ * A live edit addressed by its element's anchors instead of a node id, so it outlives a
+ * reload of the target. The server keeps the list (`liveEdits`); the window re-applies it
+ * to every page that comes in (`src/shared/liveEdits.ts`).
+ */
+export interface LiveEdit {
+  /** Where it was made: the window's page address (web) or the app package (Android). */
+  page: string
+  target: TargetKind
+  kind: string
+  label: string
+  anchors: Anchors
+  /**
+   * Which of the elements with these anchors (path + source location) it is, in snapshot
+   * order: always 0 on web, the item's place among same-path siblings on Android.
+   */
+  occurrence: number
+  /** Frame pixels. `nodeId` is the element's id where it last resolved. */
+  override: Override
+  unit: 'css-px' | 'dp'
+  pxPerUnit: number
+  /** False: the last page that came in had no element with these anchors. */
+  resolved: boolean
 }
 
 /** What the agent receives. The whole point of the tool. */
@@ -128,6 +158,10 @@ export interface EditRequest {
   /** Divide any measurement here by this to get the number that belongs in source. */
   pxPerUnit: number
   consumed: boolean
+  /** The page the window sent it from (its `LiveEdit.page`); absent from older windows. */
+  page?: string
+  /** `LiveEdit.occurrence` of the element at send time, so the right live edit leaves the list at "done". */
+  occurrence?: number
   /**
    * Current lifecycle status, owned by the server (see `RequestStatus`). Every
    * `requests` broadcast carries it, so a window that connects late gets the state
@@ -332,7 +366,10 @@ export type UiToServer =
   | { t: 'snapshot'; snapshot: Snapshot }
   | { t: 'select'; nodeId: NodeId | null }
   | { t: 'overrides'; overrides: Override[] }
-  | { t: 'submit'; comment: string }
+  /** The whole live edit list, by anchors: the server keeps it and tells the other windows. */
+  | { t: 'liveEdits'; edits: LiveEdit[] }
+  /** `page`: the live edit page the window is on (see `EditRequest.page`). */
+  | { t: 'submit'; comment: string; page?: string }
   | { t: 'clearRequests' }
   /** Empties the server's chat history; every window gets `chatCleared`. */
   | { t: 'clearChat' }
@@ -376,6 +413,11 @@ export type ServerToUi =
   /** The chat history was cleared (from a window or `DELETE /api/chat`): drop every message. */
   | { t: 'chatCleared' }
   | { t: 'requests'; requests: EditRequest[] }
+  /**
+   * The live edit list the server keeps: sent on every connect (after `ready`) and to the
+   * other windows when one of them changes it. It outlives a reload of the page and of the window.
+   */
+  | { t: 'liveEdits'; edits: LiveEdit[] }
   /**
    * One EditRequest changed status. Broadcast to every window on each transition.
    * Late windows get current status from `EditRequest.status` in the `requests` frame.

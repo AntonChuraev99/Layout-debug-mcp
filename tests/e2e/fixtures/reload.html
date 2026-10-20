@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: a page that reloads, sometimes without one of its cards</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 40px; background: #f4f5f7; font: 15px/1.5 system-ui, sans-serif; }
+      .card { width: 260px; margin: 0 0 16px; padding: 16px 20px; background: #fff; border-radius: 12px; }
+    </style>
+  </head>
+  <body>
+    <section class="card" data-testid="keep">Stays after a reload</section>
+    <section class="card" data-testid="temp">Gone after a reload</section>
+    <script>
+      // A release that removed the element: after `drop-temp` the page renders without it.
+      if (sessionStorage.getItem('drop-temp') === '1') document.querySelector('[data-testid="temp"]').remove()
+    </script>
+    __INSPECTOR__
+  </body>
+</html>

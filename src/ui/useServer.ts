@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   EditRequest,
   ErrorCode,
+  LiveEdit,
   Locale,
   ServerToUi,
   Snapshot,
@@ -74,6 +75,13 @@ export interface ServerState {
   captureErrorSeq: number
   captureError: string | null
   captureCode: ErrorCode | null
+  /**
+   * The server's live edit list, as of its last `liveEdits` frame; null before the first one.
+   * `liveEditsFrame` bumps with every frame; `seed` says it was the first frame of a socket
+   * (the server's state at connect), not a change another window made.
+   */
+  liveEdits: LiveEdit[] | null
+  liveEditsFrame: { seq: number; seed: boolean }
 }
 
 const ERROR_HISTORY = 20
@@ -105,6 +113,8 @@ export function useServer(locale: Locale) {
     captureErrorSeq: 0,
     captureError: null,
     captureCode: null,
+    liveEdits: null,
+    liveEditsFrame: { seq: 0, seed: false },
   })
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -119,6 +129,7 @@ export function useServer(locale: Locale) {
       wsRef.current = ws
       // Per socket: the server sends `requests` right after `ready` on every connect.
       let seeded = false
+      let editsSeeded = false
 
       ws.onopen = () => {
         if (wsRef.current !== ws) return
@@ -146,6 +157,8 @@ export function useServer(locale: Locale) {
         // Decided outside the updater: StrictMode runs updaters twice.
         const seed = msg.t === 'requests' && !seeded
         if (seed) seeded = true
+        const editsSeed = msg.t === 'liveEdits' && !editsSeeded
+        if (editsSeed) editsSeeded = true
         setState((s) => {
           switch (msg.t) {
             case 'ready':
@@ -192,6 +205,8 @@ export function useServer(locale: Locale) {
                 statuses: seedStatuses(s.statuses, msg.requests),
                 requestsSeed: seed ? s.requestsSeed + 1 : s.requestsSeed,
               }
+            case 'liveEdits':
+              return { ...s, liveEdits: msg.edits, liveEditsFrame: { seq: s.liveEditsFrame.seq + 1, seed: editsSeed } }
             case 'requestStatus':
               return { ...s, statuses: applyStatusEvent(s.statuses, msg) }
             case 'error': {
@@ -247,8 +262,8 @@ export function useServer(locale: Locale) {
   }, [locale, send])
 
   const submit = useCallback(
-    (comment: string): boolean => {
-      const sent = send({ t: 'submit', comment })
+    (comment: string, page?: string): boolean => {
+      const sent = send(page === undefined ? { t: 'submit', comment } : { t: 'submit', comment, page })
       if (sent) setState((s) => ({ ...s, error: null }))
       return sent
     },

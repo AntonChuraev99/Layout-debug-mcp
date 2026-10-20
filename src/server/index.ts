@@ -537,6 +537,14 @@ function serveApi(url: URL, req: IncomingMessage, res: ServerResponse) {
         return sendJson(res, { ok: true })
       }
       return sendJson(res, { requests: session.requests })
+    case '/api/live-edits':
+      // DELETE discards every live edit: the windows drop them from their pages too.
+      if (req.method === 'DELETE') {
+        session.setLiveEdits([])
+        broadcast({ t: 'liveEdits', edits: session.liveEdits })
+        return sendJson(res, { ok: true })
+      }
+      return sendJson(res, { edits: session.liveEdits })
     case '/api/requests/consume':
       return void consumeRequests(req, res)
     case '/api/requests/wait':
@@ -633,6 +641,8 @@ function greet(ws: WebSocket) {
     telemetry: { enabled: telemetry.enabled, showNotice: telemetry.windowNoticePending() },
   })
   send(ws, { t: 'requests', requests: session.requests })
+  // A reloaded window puts these back on its page (and lists the ones it cannot place).
+  send(ws, { t: 'liveEdits', edits: session.liveEdits })
   // Replay the thread so a reloaded window does not come back blank.
   for (const message of session.chat) send(ws, { t: 'chat', message })
   if (android) void captureAndroid(ws)
@@ -672,6 +682,11 @@ function onUiMessage(ws: WebSocket, raw: unknown) {
       session.overrides = msg.overrides
       if (msg.overrides.length) usage.liveEdits++
       break
+    case 'liveEdits':
+      session.setLiveEdits(msg.edits)
+      // The sender holds this list already; the other windows adopt it.
+      for (const other of clients) if (other !== ws) send(other, { t: 'liveEdits', edits: session.liveEdits })
+      break
     case 'telemetryNoticeDismissed':
       telemetry.dismissWindowNotice()
       break
@@ -684,7 +699,7 @@ function onUiMessage(ws: WebSocket, raw: unknown) {
       clearChat()
       break
     case 'submit':
-      handleSubmit(ws, msg.comment)
+      handleSubmit(ws, msg.comment, msg.page)
       break
     case 'androidCapture':
       void captureAndroid(ws)
@@ -780,8 +795,8 @@ async function clearAndroidOverrides(ws: WebSocket) {
  * it through wait_for_message (now, or on its next call), any agent through
  * pending_requests. With no agent listening the window says so in the chat.
  */
-function handleSubmit(ws: WebSocket, comment: string) {
-  const request = session.buildRequest(comment)
+function handleSubmit(ws: WebSocket, comment: string, page?: string) {
+  const request = session.buildRequest(comment, page)
   if (!request) {
     send(ws, { t: 'error', code: 'nothing_selected', message: t(localeOf(ws), 'nothingToSubmit') })
     send(ws, { t: 'chatDone' })

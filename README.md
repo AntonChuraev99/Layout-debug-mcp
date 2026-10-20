@@ -275,6 +275,16 @@ Appears next to the selected element, with breadcrumbs of its parents on top:
 | Stop waiting | Removes the "agent is editing" mark if the agent never replied |
 | Details | Box, source, classes, path, live edits, and the "Inside" list of children |
 
+### Live edits that survive a reload
+
+Every live edit is also kept on the server by its element's anchors (path, source location, test id). When the page reloads — your dev server's full reload, the page reloading itself, the window's own refresh, or the window itself reloading — the window finds each element again and puts its edit back. The **Live edits** button in the header (the move icon, with a count) lists them:
+
+- **Not found on the page** — the reload brought no element with that anchor. The edit is kept, not applied, and tried again on the next reload; **Discard** forgets it. The count turns amber while there are any.
+- **On this page** — applied now; **Reset** takes it off, like Reset edits in the palette.
+- **Copy all edits** — the whole list as **Markdown** (to paste into any agent) or **JSON**. Page text inside is quoted, capped and marked as untrusted data, as in the MCP tools.
+
+An edit sent to the agent leaves the list once the agent replies, so it never comes back on top of the code version. `GET /api/live-edits` returns the list, `DELETE /api/live-edits` discards all of it.
+
 ### Element chat, shimmer and auto refresh
 
 <p>
@@ -436,7 +446,8 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 
 ## Limitations
 
-- Live edits are a **preview**, not code: they vanish on page reload or app rebuild until the agent writes them into the source.
+- Live edits are a **preview**, not code. They come back after a page or window reload (see [Live edits that survive a reload](#live-edits-that-survive-a-reload)), but they live in the server's memory: restarting the server loses them unless a window that still has them reconnects. Copy them out or send them to the agent to keep them.
+- Android: the same list is put back when the window starts and when the app restarts (a new pid from the on-device agent); not verified on a real device yet. When the agent does not report its pid, an app restart is not detected: reload the window to put the edits back.
 - The agent has to be listening. Some agents stop the loop on their own after a while; if the header says **No agent listening**, ask again. A request the agent took stays "Agent editing" until it replies with its `requestId`, or you press "Stop waiting".
 - **Web:** the page is shown in an `iframe`, so a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs `data-source-loc` on the page: the bundled plugin covers React / JSX with Vite or Babel; other stacks (Vue, Svelte, SWC-only builds) need their own build step. In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
 - **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
