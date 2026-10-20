@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 
+### Added
+
+- Android libraries `io.github.antonchuraev99:layout-debug-agent` and `layout-debug-noop` 0.1.0 are on Maven Central; `mavenLocal()` is needed only to try unreleased changes.
+
 ## [0.3.0] - 2026-10-20
 
 Android gets a real on-device agent library, element text and live video; the web gets source-location plugins, pages that forbid framing, and live edits that survive a reload.
