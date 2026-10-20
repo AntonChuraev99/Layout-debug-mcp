@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import type { ChatMessage, EditRequest, ErrorCode, LayoutNode, NodeId, Override, Snapshot, TargetKind } from '../shared/protocol.ts'
+import type { ChatMessage, EditRequest, ErrorCode, FramingProbeResponse, LayoutNode, NodeId, Override, Snapshot, TargetKind } from '../shared/protocol.ts'
+import { framingBlock, type FramingBlock } from '../shared/framing.ts'
 import { ActionPalette } from './ActionPalette.tsx'
 import { AgentPopoverBody } from './AgentConnect.tsx'
-import { serverOrigin } from './origins.ts'
+import { frameOrigin, frameSrcFor, serverOrigin } from './origins.ts'
+import { envSnippet, framingFix } from './framing.ts'
 import { Blank, CopyBlock } from './Blank.tsx'
 import { ChatPopover, type LocalMessage } from './ChatPopover.tsx'
 import { frameCropRect, placeHeldPopover, union, type Side } from './geometry.ts'
@@ -202,6 +204,10 @@ export function App() {
   const [frameLoaded, setFrameLoaded] = useState(false)
   const [inspectorSilent, setInspectorSilent] = useState(false)
   const [bannerHidden, setBannerHidden] = useState(false)
+  /** The page in the frame forbids framing (the server's probe of its headers), for this frame address. */
+  const [framing, setFraming] = useState<{ src: string; block: FramingBlock; probeUrl: string } | null>(null)
+  /** What the iframe loads: the address itself, or the same path on the framing proxy. */
+  const frameSrc = frameSrcFor(url, state.framingProxy)
 
   /**
    * What the user picked: the node id at the moment of the pick and the anchors that outlive
@@ -631,6 +637,30 @@ export function App() {
     const t = window.setTimeout(() => setInspectorSilent(true), INSPECTOR_TIMEOUT_MS)
     return () => window.clearTimeout(t)
   }, [frameLoaded, web.connected])
+  // A page that forbids framing never runs the inspector. The server reads its headers (the
+  // window can't: the frame is cross-origin), so the window can name the header and the fix
+  // right away. A probe that can't run leaves the generic "didn't respond" path above.
+  useEffect(() => {
+    setFraming(null)
+    if (isAndroid || !frameSrc) return
+    const ctrl = new AbortController()
+    fetch(`/api/framing?url=${encodeURIComponent(frameSrc)}`, { signal: ctrl.signal, cache: 'no-store' })
+      .then(async (res) => {
+        const body = (await res.json().catch(() => null)) as (FramingProbeResponse & { error?: string }) | null
+        if (!res.ok || !body) {
+          console.warn(`[layout-debug] could not check the framing headers of ${frameSrc}: ${body?.error ?? `HTTP ${res.status}`}`)
+          return
+        }
+        const block = framingBlock(body, frameOrigin(body.url) ?? '', location.origin)
+        if (block) setFraming({ src: frameSrc, block, probeUrl: body.url })
+      })
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return
+        console.warn(`[layout-debug] could not check the framing headers of ${frameSrc}: ${err instanceof Error ? err.message : String(err)}`)
+      })
+    return () => ctrl.abort()
+  }, [isAndroid, frameSrc, frameKey])
+  const frameBlocked = !isAndroid && Boolean(url) && framing !== null && framing.src === frameSrc && !web.connected
 
   // --- requests: statuses, marks, unread ---
   const analysis = useMemo(() => analyzeChat(state.chat, state.requests), [state.chat, state.requests])
@@ -1424,6 +1454,8 @@ export function App() {
         </div>
       ),
     }
+  } else if (frameBlocked) {
+    status = { tone: 'warn', text: t('status.frameBlocked'), onClick: () => setBannerHidden(false) }
   } else if (!isAndroid && url && inspectorSilent) {
     status = { tone: 'warn', text: t('status.inspectorSilent'), onClick: () => setBannerHidden(false) }
   } else if (!isAndroid && web.error) {
@@ -1438,7 +1470,7 @@ export function App() {
       ),
     }
   }
-  const webConnecting = !isAndroid && showsConnecting({ url, connected: web.connected, silent: inspectorSilent, swapping: holdingFrame })
+  const webConnecting = !isAndroid && showsConnecting({ url, connected: web.connected, silent: inspectorSilent || frameBlocked, swapping: holdingFrame })
   if (!status && webConnecting) status = { tone: 'busy', text: t('status.connectingInspector') }
 
   const loading = webConnecting || (isAndroid && androidState === 'connecting' && state.online)
@@ -1690,12 +1722,12 @@ export function App() {
             f.held ? (
               // The page before the window's own refresh: only a picture now. The bridge talks
               // to the new frame under it, so nothing it posts counts any more.
-              <iframe key={f.key} src={url} className="frame--held" aria-hidden="true" tabIndex={-1} />
+              <iframe key={f.key} src={frameSrc} className="frame--held" aria-hidden="true" tabIndex={-1} />
             ) : (
               <iframe
                 key={f.key}
                 ref={iframeRef}
-                src={url}
+                src={frameSrc}
                 title={t('canvas.frameTitle')}
                 onLoad={() => {
                   web.onFrameLoad()
@@ -1863,7 +1895,47 @@ export function App() {
           )}
         </div>
 
-        {!isAndroid && url && inspectorSilent && !bannerHidden && (
+        {frameBlocked && framing && !bannerHidden && (
+          <div className="banner" role="status">
+            <div className="banner__head">
+              <IconPlug size={15} />
+              <h2 className="banner__title">{t('framing.title')}</h2>
+              <button type="button" className="icon-btn" aria-label={t('common.close')} title={t('common.close')} onClick={() => setBannerHidden(true)}>
+                <IconX size={14} />
+              </button>
+            </div>
+            <p className="banner__text">
+              {rich('framing.text', { header: <code className="mono">{`${framing.block.header}: ${framing.block.value}`}</code> })}
+            </p>
+            {(() => {
+              const fix = framingFix(frameSrc, framing.probeUrl, state.framingProxy)
+              if (fix.kind === 'redirectedAway') {
+                return (
+                  <>
+                    <p className="banner__text">{t('framing.redirectedAway', { origin: fix.origin, target: fix.target })}</p>
+                    <CopyBlock text={envSnippet({ LD_FRAMING_PROXY: '1', LD_TARGET_URL: framing.probeUrl })} />
+                  </>
+                )
+              }
+              if (fix.kind === 'otherTarget') {
+                return (
+                  <>
+                    <p className="banner__text">{t('framing.otherTarget', { target: fix.target })}</p>
+                    <CopyBlock text={envSnippet({ LD_FRAMING_PROXY: '1', LD_TARGET_URL: url })} />
+                  </>
+                )
+              }
+              return (
+                <>
+                  <p className="banner__text">{t('framing.fix')}</p>
+                  <CopyBlock text={envSnippet({ LD_FRAMING_PROXY: '1', LD_TARGET_URL: url })} />
+                  <p className="banner__text">{t('framing.fixNote')}</p>
+                </>
+              )
+            })()}
+          </div>
+        )}
+        {!isAndroid && url && inspectorSilent && !frameBlocked && !bannerHidden && (
           <div className="banner" role="status">
             <div className="banner__head">
               <IconPlug size={15} />

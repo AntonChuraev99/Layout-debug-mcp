@@ -342,6 +342,16 @@ The window is in English by default. The `EN | RU` switch in the header changes 
 
    Both take `{ root }` (absolute, or relative to the project root, e.g. `'../..'` for a monorepo root) when paths should start from another folder. A file Babel can't parse is served unchanged, with a warning naming it. Without the plugin the agent finds the element by `data-testid`, id and the class string.
 
+### Pages that forbid framing
+
+The page is shown in an `iframe`. If it sends `X-Frame-Options` or a CSP `frame-ancestors` that doesn't list the window, the window says so and names the header. Allow framing in your dev server, or turn on the framing proxy for your target:
+
+```json
+{ "targetUrl": "http://localhost:3000", "framingProxy": true }
+```
+
+(or `LD_FRAMING_PROXY=1` with `LD_TARGET_URL` in the client's `env`). The window then loads the page through `http://127.0.0.1:5176` (`LD_FRAMING_PROXY_PORT`). The proxy listens on loopback, forwards to the configured target's origin only, drops `X-Frame-Options` and the `frame-ancestors` directive (the rest of your CSP stays), and lets only the layout-debug window frame the page. Redirects and WebSocket (HMR) connections go through it. Why it is built this way: [ADR](docs/decisions/framing-proxy-2026-10-20.md).
+
 ## Android
 
 The on-device agent is a small debug-only component: it walks the real Compose tree via `ui-tooling` (`asTree()` gives boxes and compiler source info), serves it with a `PixelCopy` screenshot over HTTP, and applies live overrides by swapping the `LayoutNode` modifier on the running composition. The tool reaches it through `adb forward`, which it sets up and re-establishes by itself. Each capture asks for the tree and the screenshot at the same time and keeps that screenshot with the tree, so they match; several open windows share one capture.
@@ -370,6 +380,8 @@ Environment variables (set them in the MCP client's `env`) override `layout-debu
 |---|---|---|---|
 | `LD_TARGET` | `target` | `web` | `web` or `android` |
 | `LD_TARGET_URL` | `targetUrl` | bundled demo | Page to inspect (web) |
+| `LD_FRAMING_PROXY` | `framingProxy` | off | `1` = load the target through a loopback proxy that drops the headers forbidding framing (web, see [Pages that forbid framing](#pages-that-forbid-framing)) |
+| `LD_FRAMING_PROXY_PORT` | `framingProxyPort` | `5176` | Port of that proxy on `127.0.0.1` |
 | `LD_PROJECT_DIR` | `projectDir` | start folder | Your project; file paths in the window are shown relative to it |
 | `LD_DEVICE` | `device` | none | `adb -s` serial (android) |
 | `LD_ANDROID_PORT` | `androidPort` | `8790` | On-device agent port (android) |
@@ -419,6 +431,7 @@ Good tools sit nearby; here is where this one differs.
 ## Security
 
 - The server listens on `127.0.0.1` only and checks `Origin` and `Host` on HTTP and WebSocket requests, so a web page open in your browser can't drive it (including via DNS rebinding).
+- The framing proxy is off by default. When on, it listens on `127.0.0.1`, forwards only to the configured target and refuses any other host, and lets only the layout-debug window frame the page.
 - The tool has no agent of its own and never edits your code. Your agent does, with the permissions your MCP client gives it.
 - Page text (class names, text, anchors) reaches the agent marked as untrusted page data and length-capped.
 - Nothing leaves your machine except what goes to the agent you connect, and anonymous usage counts ([Telemetry](#telemetry)) unless you turn them off.
@@ -449,7 +462,7 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 - Live edits are a **preview**, not code. They come back after a page or window reload (see [Live edits that survive a reload](#live-edits-that-survive-a-reload)), but they live in the server's memory: restarting the server loses them unless a window that still has them reconnects. Copy them out or send them to the agent to keep them.
 - Android: the same list is put back when the window starts and when the app restarts (a new pid from the on-device agent); not verified on a real device yet. When the agent does not report its pid, an app restart is not detected: reload the window to put the edits back.
 - The agent has to be listening. Some agents stop the loop on their own after a while; if the header says **No agent listening**, ask again. A request the agent took stays "Agent editing" until it replies with its `requestId`, or you press "Stop waiting".
-- **Web:** the page is shown in an `iframe`, so a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs `data-source-loc` on the page: the bundled plugin covers React / JSX with Vite or Babel; other stacks (Vue, Svelte, SWC-only builds) need their own build step. In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
+- **Web:** the page is shown in an `iframe`; a target that sends `X-Frame-Options` / `frame-ancestors` needs the [framing proxy](#pages-that-forbid-framing), one target per server start. Through it the page runs on the proxy's origin, so OAuth redirect URIs and absolute URLs the page builds from its own config still point at the original address. Its cookies are renamed with a `ldp<port>_` prefix (page code reading them by name sees the prefixed name), only those reach the target, and non-HttpOnly ones are readable by other pages on `127.0.0.1`, which browsers don't separate by port. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs `data-source-loc` on the page: the bundled plugin covers React / JSX with Vite or Babel; other stacks (Vue, Svelte, SWC-only builds) need their own build step. In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
 - **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
 
 ## Troubleshooting
@@ -461,7 +474,8 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 | Window shows "The window didn't start" | The cause line says what failed (a window script didn't load, or nothing rendered within 15 s). Ask the agent to call `open_window` again, then press "Reload page" |
 | Client doesn't list the server | `node -v` is 20.19+ / 22.12+ in the environment the client starts from. GUI apps started from the Start menu or Dock may not see a Node from nvm / Volta / fnm: put the absolute path to `npx` as `command`. Restart the session (Claude Desktop: fully quit) |
 | Windows: `spawn npx ENOENT` | Use `"command": "cmd", "args": ["/c", "npx", "-y", "layout-debug-mcp"]` |
-| Window says the inspector didn't respond | The script tag is in the page, the target allows framing (`X-Frame-Options`, CSP `frame-ancestors`), CSP `script-src` allows `127.0.0.1:5175` |
+| Window says the inspector didn't respond | The script tag is in the page, CSP `script-src` allows `127.0.0.1:5175` |
+| Window says the page can't be shown in a frame | The banner names the header (`X-Frame-Options` or CSP `frame-ancestors`). Allow framing in the dev server, or restart with `LD_FRAMING_PROXY=1` and `LD_TARGET_URL` set to this page (see [Pages that forbid framing](#pages-that-forbid-framing)) |
 | Android: "adb not found" / "No device connected" | `adb devices` lists exactly one device with status `device` (or set `LD_DEVICE`); the window picks it up without a reload |
 | Android: "The device is there, but the app is silent" | The app runs as a debug build with the agent, listening on `LD_ANDROID_PORT` (8790) |
 | Android: "the agent on port … belongs to …, not to …" | Another debug app holds the agent port. Close it and start yours, or fix `LD_ANDROID_PACKAGE` |

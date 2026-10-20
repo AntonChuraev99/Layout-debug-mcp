@@ -132,8 +132,13 @@ export interface StaticSite {
  * Serves `dir` on a free loopback port, never cached, with the inspector tag filled in.
  * `delayMs` holds every response that long: a dev server that takes a moment to answer,
  * so the gap between leaving a page and painting the next one is long enough to see.
+ * `headers` go on every response (a dev server that forbids framing); `inspectorTag` points
+ * the pages at another server instance than the shared one.
  */
-export async function serveDir(dir: string, opts: { delayMs?: number } = {}): Promise<StaticSite> {
+export async function serveDir(
+  dir: string,
+  opts: { delayMs?: number; headers?: Record<string, string>; inspectorTag?: string } = {},
+): Promise<StaticSite> {
   const server: Server = createServer(async (req, res) => {
     if (opts.delayMs) await new Promise((ok) => setTimeout(ok, opts.delayMs))
     const path = new URL(req.url ?? '/', 'http://x').pathname
@@ -145,8 +150,12 @@ export async function serveDir(dir: string, opts: { delayMs?: number } = {}): Pr
     }
     try {
       let body = await readFile(file, 'utf8')
-      if (file.endsWith('.html')) body = body.replaceAll(INSPECTOR_PLACEHOLDER, INSPECTOR_TAG)
-      res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' })
+      if (file.endsWith('.html')) body = body.replaceAll(INSPECTOR_PLACEHOLDER, opts.inspectorTag ?? INSPECTOR_TAG)
+      res.writeHead(200, {
+        'content-type': MIME[extname(file)] ?? 'application/octet-stream',
+        'cache-control': 'no-store',
+        ...opts.headers,
+      })
       res.end(body)
     } catch {
       res.writeHead(404, { 'content-type': 'text/plain' }).end(`fixture not found: ${rel}`)

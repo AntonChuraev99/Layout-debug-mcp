@@ -2,6 +2,7 @@
 
 | date | category | keywords | path |
 |---|---|---|---|
+| 2026-10-20 | decision | x-frame-options, frame-ancestors, csp, iframe, proxy, loopback, hmr | [Web targets that forbid framing: header probe and an opt-in framing proxy](../decisions/framing-proxy-2026-10-20.md) |
 | 2026-10-20 | decision | live-edits, reload, anchor, sourceLoc, testid, export, restore | [Live edits survive a reload: an anchor-keyed list, restored by the window](../decisions/live-edits-survive-reload-2026-10-20.md) |
 | 2026-10-20 | decision | data-source-loc, vite, babel, nextjs, jsx, code-inspector, locatorjs, peer-dependency | [Own dev-only JSX plugin for data-source-loc](../decisions/jsx-source-loc-plugin-2026-10-20.md) |
 | 2026-10-19 | solution | android, node-id, remount, elementKey, single-flight, frame-cache, adb-stall, device_unresponsive, reload-hold | [Android live session: lag, lost chat state, misleading "app is silent"](android-live-session-lag-and-state-loss-2026-10-19.md) |

@@ -352,6 +352,27 @@ export interface HealthResponse {
   projectDir: string
 }
 
+/**
+ * GET /api/framing?url=<frame address>: the framing headers of the page the window frames,
+ * after redirects (src/shared/framing.ts decides whether they block). Loopback addresses and
+ * the configured target only.
+ */
+export interface FramingProbeResponse {
+  /** The address the redirects ended on. */
+  url: string
+  status: number
+  xFrameOptions: string | null
+  contentSecurityPolicy: string | null
+}
+
+/** The opt-in framing proxy: the window loads `origin` in place of `target` (src/server/framingProxy.ts). */
+export interface FramingProxyInfo {
+  /** `http://127.0.0.1:<port>`. */
+  origin: string
+  /** The proxied target origin. */
+  target: string
+}
+
 /** Error body of every /api/* failure (4xx/5xx). */
 export interface ApiErrorBody {
   error: string
@@ -400,6 +421,8 @@ export type ServerToUi =
        * (enabled and not dismissed yet); closing it sends `telemetryNoticeDismissed`.
        */
       telemetry: { enabled: boolean; showNotice: boolean }
+      /** The framing proxy, when it is on (web target, LD_FRAMING_PROXY=1); absent from older servers. */
+      framingProxy?: FramingProxyInfo | null
     }
   /**
    * The "agent listening" state changed. Listening = a wait_for_message call is open, one
