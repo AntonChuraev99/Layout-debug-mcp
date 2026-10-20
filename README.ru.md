@@ -372,7 +372,7 @@ dependencies {
 - **androidx.startup выключен** (`tools:node="remove"` на `InitializationProvider`)? Вызови `LayoutDebug.install(this)` в `Application.onCreate`; с noop-артефактом строка компилируется в release и ничего не делает.
 - **Порт 8790 на устройстве уже занят** другим debug-приложением с агентом? Перенеси своё через `<meta-data android:name="io.github.antonchuraev99.layoutdebug.PORT" android:value="8791" />` в манифесте приложения и задай тот же `LD_ANDROID_PORT`. Тег агента в logcat — `layout-debug`: там видно, какой порт он занял или почему не смог.
 - **Требования:** Jetpack Compose 1.7+ (Compose Multiplatform 1.7+ на Android использует те же библиотеки), minSdk 21, скриншоты — с Android 8.0. Агент не поднимает версию Compose в приложении: он объявляет 1.7 минимумом, побеждает версия приложения.
-- **Пока первый релиз не попал в Maven Central**, собери артефакты из этого репозитория: `cd android && ./gradlew publishToMavenLocal` и добавь `mavenLocal()` в репозитории. `android/sample` — простое Compose-приложение с подключённым агентом.
+- Оба артефакта лежат в Maven Central, поэтому хватает `mavenCentral()` в репозиториях. Чтобы попробовать невыпущенные изменения, запусти `cd android && ./gradlew publishToMavenLocal` и добавь `mavenLocal()`. `android/sample` — простое Compose-приложение с подключённым агентом.
 
 Android-режим включается строкой `{ "target": "android" }` в `layout-debug.config.json` проекта или через `env` в конфиге MCP-клиента:
 

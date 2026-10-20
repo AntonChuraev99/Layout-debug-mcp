@@ -370,7 +370,7 @@ That's the whole setup. The agent starts with the app process (androidx.startup)
 - **Turned off androidx.startup** (`tools:node="remove"` on `InitializationProvider`)? Call `LayoutDebug.install(this)` in `Application.onCreate`; with the noop artifact the line compiles in release and does nothing.
 - **Another debug app with the agent already holds 8790** on the device? Move yours with `<meta-data android:name="io.github.antonchuraev99.layoutdebug.PORT" android:value="8791" />` in the app's manifest and set the same `LD_ANDROID_PORT`. The agent's logcat tag is `layout-debug`: it logs the port it got or why it could not bind.
 - **Requirements:** Jetpack Compose 1.7+ (Compose Multiplatform 1.7+ on Android uses the same libraries), minSdk 21, screenshots on Android 8.0+. The agent never upgrades your Compose: it declares 1.7 as its minimum and your app's version wins.
-- **Before the first release reaches Maven Central**, build the artifacts from this repo: `cd android && ./gradlew publishToMavenLocal`, and add `mavenLocal()` to your repositories. `android/sample` is a plain Compose app with the agent wired in.
+- Both artifacts are on Maven Central, so `mavenCentral()` in your repositories is enough. To try unreleased changes, run `cd android && ./gradlew publishToMavenLocal` and add `mavenLocal()`. `android/sample` is a plain Compose app with the agent wired in.
 
 Switch the tool to Android mode with `{ "target": "android" }` in `layout-debug.config.json` in your project, or with `env` in the MCP client config:
 
