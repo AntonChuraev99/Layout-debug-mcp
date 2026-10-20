@@ -351,6 +351,24 @@ The agent reports who it is in `GET /health`, next to `ok` and `port`: `package`
 
 In Android mode the window shows the device frame instead of an iframe, with the same overlay, selection, drag and reset. The frame refreshes on its own (paused while you drag, backing off when captures fail), and the header chip shows the device model. The first snapshot of a session resets the device's live overrides, so stale ones from a previous window don't linger.
 
+Each node carries its own text and content description from the Compose semantics tree (`Text "Row 1"` in breadcrumbs, `text:` in what the agent gets), marked as page data and capped like web text.
+
+### Compose compatibility
+
+The agent reads the tree through `@UiToolingDataApi` (no stability guarantee) and swaps modifiers through reflection on internal `LayoutNode` members, so each Compose line is checked on its own. "Verified" means the sample app built against that line and its instrumentation test passed on an emulator: `/tree` has the lazy-list items with source and text, items composed ahead of a scroll are left out, and a live edit moves a row by the requested offset and resets. CI runs the same test for every verified row.
+
+| Compose UI (BOM) | activity-compose | Kotlin | AGP | Status |
+|---|---|---|---|---|
+| 1.12.1 (2026.09.00) | 1.13.0 | 2.4.21 | 9.4.1 | Verified (emulator API 36; also checked by hand on a Pixel 9, Android 17) |
+| 1.11.4 (2026.06.01) | 1.13.0 | 2.4.21 | 9.4.1 | Verified (emulator API 36) |
+| 1.10.6 (2026.03.01) | 1.13.0 | 2.4.21 | 9.4.1 | Verified (emulator API 36) |
+| 1.8, 1.9 | — | — | — | Not verified |
+| 1.7.0 (2024.09.00), the agent's minimum | 1.9.2 | 2.4.21 | 9.4.1 | Verified (emulator API 36) |
+| Compose Multiplatform (Android target) | — | — | — | Not verified with this library (an earlier prototype of the agent ran on CMP 1.11 / Kotlin 2.3.20) |
+| App on Kotlin < 2.2, or AGP 8.x | — | — | — | Not verified |
+
+When the agent meets a Compose it cannot read or edit, it does not fail silently: `/tree` or the live edit answers with an error that names the Compose UI version and what was not found (for example `LayoutNode has no public setModifier*(Modifier)`), and the window shows it. `/health` reports the version as `compose`.
+
 ## Configuration
 
 Environment variables (set them in the MCP client's `env`) override `layout-debug.config.json` in the folder the tool starts in (`LD_CONFIG` points to another file), which overrides defaults.
@@ -438,7 +456,7 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 - Live edits are a **preview**, not code: they vanish on page reload or app rebuild until the agent writes them into the source.
 - The agent has to be listening. Some agents stop the loop on their own after a while; if the header says **No agent listening**, ask again. A request the agent took stays "Agent editing" until it replies with its `requestId`, or you press "Stop waiting".
 - **Web:** the page is shown in an `iframe`, so a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs your own `data-source-loc` build step (no plugin shipped yet). In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
-- **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20 and Jetpack Compose 1.12 (BOM 2026.09.00) on Android 17. Boxes line up with the activity's content view; content in a dialog or popup window is in the tree but not at its place on the frame. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
+- **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees: see [Compose compatibility](#compose-compatibility) for what is verified. Boxes line up with the activity's content view; content in a dialog or popup window is in the tree but not at its place on the frame. Element text is a node's own text (a `Button` shows none, its `Text` child does).
 
 ## Troubleshooting
 

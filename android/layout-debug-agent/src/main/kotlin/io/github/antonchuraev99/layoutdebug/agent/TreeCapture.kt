@@ -7,6 +7,10 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.runtime.tooling.CompositionData
 import androidx.compose.ui.layout.LayoutInfo
+import androidx.compose.ui.node.RootForTest
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.tooling.data.Group
 import androidx.compose.ui.tooling.data.NodeGroup
 import androidx.compose.ui.tooling.data.UiToolingDataApi
@@ -39,7 +43,10 @@ internal object TreeCapture {
         // ui-tooling boxes are in window coordinates; the screenshot starts at the content view.
         val origin = IntArray(2).also(content::getLocationInWindow)
 
-        val tables = slotTables(activity.window.decorView)
+        Agent.inspectionError?.let { return error(it) }
+        val tables = runCatching { slotTables(activity.window.decorView) }.getOrElse {
+            return error(ComposeVersion.unsupported("could not read the slot tables (view tag inspection_slot_table_set)", it))
+        }
         if (tables.isEmpty()) {
             return error(
                 "no Compose slot tables on this screen: either it has no Compose content, or it " +
@@ -52,15 +59,33 @@ internal object TreeCapture {
         root.id = "root"
         // The root stays "Composition" whatever full-screen call it absorbs.
         root.library = false
+        var tableFailure: Throwable? = null
         val tableRoots = tables.mapNotNull { table ->
             val tree = runCatching { table.asTree() }
-                .onFailure { log("could not read a slot table: ${it.message}") }
+                .onFailure {
+                    tableFailure = it
+                    logError("could not read a slot table: ${it.javaClass.simpleName}: ${it.message}")
+                }
                 .getOrNull() ?: return@mapNotNull null
-            TreeNode("Table", null, -1, root.box, null).also { build(tree, it, origin) }
+            TreeNode("Table", null, -1, root.box, null).also {
+                build(tree, it, origin)
+                TreeShape.dropUnplaced(it) { node -> (node as? LayoutInfo)?.isPlaced != false }
+            }
         }
-        TreeShape.attachSubcompositions(root, tableRoots) { node -> (node as? LayoutInfo)?.parentInfo }
+        // Every table failed: the tooling API itself does not work here, not one odd table.
+        if (tableRoots.isEmpty()) {
+            return error(ComposeVersion.unsupported("ui-tooling-data could not read any slot table (CompositionData.asTree)", tableFailure))
+        }
+        val layoutParent = runCatching {
+            TreeShape.attachSubcompositions(root, tableRoots) { node -> (node as? LayoutInfo)?.parentInfo }
+        }
+        layoutParent.exceptionOrNull()?.let {
+            return error(ComposeVersion.unsupported("LayoutInfo.parentInfo failed", it))
+        }
         TreeShape.collapse(root)
         TreeShape.inheritLayoutNodes(root)
+        val texts = semanticsTexts(activity.window.decorView)
+        TreeShape.attachText(root) { texts[it] }
         ids.prune()
         TreeShape.assignIds(root, ids::idOf)
         val (json, nodes) = TreeShape.serialize(root, meta(content.width, content.height))
@@ -68,6 +93,41 @@ internal object TreeCapture {
     }
 
     private fun error(message: String) = Result(Json.error(message), emptyMap())
+
+    private var textFailureLogged = false
+
+    /**
+     * Text and content description of every layout node that has them, keyed by the node
+     * object: read from the unmerged semantics tree of each Compose root in the window
+     * (`RootForTest.semanticsOwner`, public since Compose 1.0). A failure only costs the text:
+     * the tree is still served, and the reason is logged once.
+     */
+    private fun semanticsTexts(view: View): Map<Any, NodeText> {
+        val out = IdentityHashMap<Any, NodeText>()
+        runCatching { collectTexts(view, out) }.onFailure {
+            if (!textFailureLogged) {
+                textFailureLogged = true
+                logError(ComposeVersion.unsupported("element text is unavailable: reading the semantics tree failed", it))
+            }
+        }
+        return out
+    }
+
+    private fun collectTexts(view: View, into: MutableMap<Any, NodeText>) {
+        if (view is RootForTest) visit(view.semanticsOwner.unmergedRootSemanticsNode, into)
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) collectTexts(view.getChildAt(i), into)
+        }
+    }
+
+    private fun visit(node: SemanticsNode, into: MutableMap<Any, NodeText>) {
+        val config = node.config
+        val editable = config.getOrNull(SemanticsProperties.EditableText)?.text
+        val text = NodeText.clean(editable?.let(::listOf) ?: config.getOrNull(SemanticsProperties.Text)?.map { it.text })
+        val description = NodeText.clean(config.getOrNull(SemanticsProperties.ContentDescription))
+        if (text != null || description != null) into[node.layoutInfo] = NodeText(text, description)
+        for (child in node.children) visit(child, into)
+    }
 
     /** Every slot table set any view of this window carries, deduplicated. */
     private fun slotTables(view: View): List<CompositionData> {

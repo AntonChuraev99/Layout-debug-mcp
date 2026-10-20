@@ -54,6 +54,11 @@ internal object Agent {
     @Volatile
     private var resumed: WeakReference<Activity>? = null
 
+    /** Why the inspection tables could not be turned on, if they could not (see [install]). */
+    @Volatile
+    var inspectionError: String? = null
+        private set
+
     private var port: Int = DEFAULT_PORT
     private var packageName: String? = null
     private lateinit var workers: ExecutorService
@@ -75,8 +80,12 @@ internal object Agent {
         if (!installed.compareAndSet(false, true)) return
 
         // Before anything is composed: every ComposeView then keeps its slot tables for us,
-        // subcompositions included (see TreeCapture).
-        isDebugInspectorInfoEnabled = true
+        // subcompositions included (see TreeCapture). A Compose without the switch would throw
+        // a LinkageError here; the server still starts and /tree names what is missing.
+        runCatching { isDebugInspectorInfoEnabled = true }.onFailure {
+            inspectionError = ComposeVersion.unsupported("could not turn on androidx.compose.ui.platform.isDebugInspectorInfoEnabled", it)
+            logError(inspectionError!!)
+        }
 
         packageName = app.packageName
         port = configuredPort(app)
@@ -193,7 +202,7 @@ internal object Agent {
 
     private fun captureTree(): String = onActivity { activity ->
         val result = TreeCapture.capture(activity) { w, h ->
-            TreeMeta(density(activity), w, h, packageName, Process.myPid())
+            TreeMeta(density(activity), w, h, packageName, Process.myPid(), ComposeVersion.ui)
         }
         if (result.nodes.isNotEmpty()) LiveOverrides.onCaptured(result.nodes, density(activity))
         result.json
@@ -212,6 +221,7 @@ internal object Agent {
         packageName?.let { append(",\"package\":").appendJsonString(it) }
         append(",\"pid\":").append(Process.myPid())
         append(",\"version\":").appendJsonString(AGENT_VERSION)
+        ComposeVersion.ui?.let { append(",\"compose\":").appendJsonString(it) }
         append('}')
     }
 }

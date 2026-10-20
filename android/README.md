@@ -25,6 +25,15 @@ adb forward tcp:8790 tcp:8790 && curl http://127.0.0.1:8790/health
 
 `-PlayoutDebugPort=8791` builds the sample with the agent on another port (when another debug app holds 8790).
 
+Compatibility check on a device or emulator (one row of the README table; CI runs every row):
+
+```bash
+ANDROID_SERIAL=emulator-5554 ./gradlew :sample:connectedDebugAndroidTest \
+  -PcomposeBom=2024.09.00 -PactivityCompose=1.9.2 -PexpectedComposeUi=1.7.0
+```
+
+`ANDROID_SERIAL` keeps the run off other connected devices; `-PexpectedComposeUi` makes the test fail if a dependency pulled another Compose version in.
+
 ## Publishing (maintainers)
 
 Artifacts go to Maven Central through the [Central Portal](https://central.sonatype.com) with [`com.vanniktech.maven.publish`](https://vanniktech.github.io/gradle-maven-publish-plugin/central/). Coordinates and POM are in `gradle.properties`. Nothing secret lives in this repository: credentials and the signing key come only from your `~/.gradle/gradle.properties` or `ORG_GRADLE_PROJECT_*` environment variables.

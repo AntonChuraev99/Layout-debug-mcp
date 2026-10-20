@@ -66,7 +66,7 @@ export interface CapturedFrame {
 }
 
 /** What the on-device agent serves at /tree. */
-interface DeviceNode {
+export interface DeviceNode {
   id: string
   parentId: string | null
   childIds: string[]
@@ -76,9 +76,12 @@ interface DeviceNode {
   bounds: { x: number; y: number; w: number; h: number }
   source: { file: string; line: number } | null
   movable: boolean
+  /** Newer agents: the node's own text and content description, from its semantics. */
+  text?: unknown
+  contentDescription?: unknown
 }
 
-interface DeviceTree {
+export interface DeviceTree {
   target: 'android'
   unit: 'dp'
   pxPerUnit: number
@@ -563,23 +566,27 @@ export function classifyCaptureError(err: unknown): ErrorCode {
 
 /**
  * Device tree → the same Snapshot shape the web adapter produces, so the UI, the MCP
- * server and the agent prompt stay identical across targets.
+ * server and the agent prompt stay identical across targets. Pure; exported for tests.
  */
-function normalize(tree: DeviceTree): Snapshot {
+export function normalize(tree: DeviceTree): Snapshot {
   const nodes: Record<NodeId, LayoutNode> = {}
 
   for (const [id, n] of Object.entries(tree.nodes)) {
     const dp = (px: number) => `${Math.round((px / tree.pxPerUnit) * 10) / 10}dp`
+    const { text, contentDescription } = deviceNodeText(n)
+    const shown = text ?? contentDescription
     nodes[id] = {
       id,
       parentId: n.parentId,
       childIds: n.childIds,
       depth: n.depth,
       kind: n.kind,
-      label: n.kind,
+      label: deviceNodeLabel(n.kind, shown),
       bounds: n.bounds,
       anchors: {
         sourceLoc: n.source ? `${n.source.file}:${n.source.line}` : undefined,
+        // Like the web inspector's own text: what the agent searches the code for.
+        text: shown,
         path: pathOf(tree, id),
       },
       styles: {
@@ -591,6 +598,7 @@ function normalize(tree: DeviceTree): Snapshot {
         // Compose tweaks land on the node that owns the modifier chain; a node without
         // one can be selected and described but not dragged.
         movable: n.movable ? 'yes' : 'no',
+        ...(contentDescription && text ? { contentDescription } : {}),
       },
     }
   }
@@ -605,6 +613,39 @@ function normalize(tree: DeviceTree): Snapshot {
     rootId: tree.rootId,
     nodes,
   }
+}
+
+/** Longest device text kept in a snapshot: the same cap the web inspector puts on its text. */
+export const DEVICE_TEXT_MAX = 60
+/** Longest text shown inside a label, as on the web (`button "Save…"`). */
+const LABEL_TEXT_MAX = 24
+
+function cleanDeviceText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const s = value.replace(/\s+/g, ' ').trim()
+  if (!s) return undefined
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
+/**
+ * A device node's `text` and `contentDescription`: strings only (anything else from the
+ * device is dropped), whitespace collapsed, capped at DEVICE_TEXT_MAX. They are page data:
+ * MCP output quotes and marks them like web text. Pure; exported for tests.
+ */
+export function deviceNodeText(n: { text?: unknown; contentDescription?: unknown }): {
+  text?: string
+  contentDescription?: string
+} {
+  return {
+    text: cleanDeviceText(n.text, DEVICE_TEXT_MAX),
+    contentDescription: cleanDeviceText(n.contentDescription, DEVICE_TEXT_MAX),
+  }
+}
+
+/** `Text "Row 1"` when the node shows text, else just the composable name. Pure; exported for tests. */
+export function deviceNodeLabel(kind: string, shown: string | undefined): string {
+  if (!shown) return kind
+  return `${kind} "${shown.length > LABEL_TEXT_MAX ? `${shown.slice(0, LABEL_TEXT_MAX)}…` : shown}"`
 }
 
 /** `Scaffold > Column > Row > Text` — the readable trail an agent can search by. */

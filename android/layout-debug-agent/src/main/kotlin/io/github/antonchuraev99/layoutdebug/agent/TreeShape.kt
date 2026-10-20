@@ -35,9 +35,28 @@ internal class TreeNode(
      */
     var library: Boolean = sourceFile == null
 
+    /** What the node shows, from the semantics of its own layout node (see [TreeShape.attachText]). */
+    var text: String? = null
+    var contentDescription: String? = null
+
     fun add(child: TreeNode) {
         child.parent = this
         children.add(child)
+    }
+}
+
+/** Text a layout node's own (unmerged) semantics carries. */
+internal class NodeText(val text: String?, val contentDescription: String?) {
+    companion object {
+        /** Longest text kept per node; the desktop tool caps it further for display. */
+        const val MAX = 500
+
+        /** Joined with spaces, whitespace collapsed, capped; null when nothing is left. */
+        fun clean(parts: List<String>?): String? {
+            val joined = parts?.joinToString(" ")?.replace(Regex("\\s+"), " ")?.trim()
+            if (joined.isNullOrEmpty()) return null
+            return if (joined.length > MAX) joined.take(MAX - 1) + "…" else joined
+        }
     }
 }
 
@@ -48,6 +67,8 @@ internal class TreeMeta(
     val heightPx: Int,
     val packageName: String?,
     val pid: Int?,
+    /** The app's Compose UI version, as the APK reports it. */
+    val composeVersion: String? = null,
 )
 
 /**
@@ -57,6 +78,35 @@ internal class TreeMeta(
  * `Scaffold → Surface → CompositionLocalProvider → Box → Layout`, all with the same box.
  */
 internal object TreeShape {
+
+    /**
+     * Removes layout nodes that are composed but not placed, with everything under them, and
+     * the call groups left empty by that. A lazy list composes items ahead of scrolling
+     * (prefetch) and keeps some for reuse without placing them; ui-tooling reports such a
+     * node at (0, 0) with its own size, so it would cover the top-left of the screen and win
+     * clicks there. Run on each table before [attachSubcompositions].
+     *
+     * @return whether [node] lost all its children to this (the caller drops a call group then)
+     */
+    fun dropUnplaced(node: TreeNode, isPlaced: (Any) -> Boolean): Boolean {
+        var removedAny = false
+        val it = node.children.iterator()
+        while (it.hasNext()) {
+            val child = it.next()
+            val own = child.ownLayoutNode
+            if (own != null && !isPlaced(own)) {
+                it.remove()
+                removedAny = true
+                continue
+            }
+            val emptied = dropUnplaced(child, isPlaced)
+            if (emptied && child.ownLayoutNode == null && child.children.isEmpty()) {
+                it.remove()
+                removedAny = true
+            }
+        }
+        return removedAny && node.children.isEmpty()
+    }
 
     /**
      * Moves each subcomposition (one slot table of a `SubcomposeLayout`: Scaffold slots, every
@@ -109,6 +159,30 @@ internal object TreeShape {
         }
         for (child in node.children) collapse(child)
     }
+
+    /**
+     * Gives each node the text of its own layout node, looked up by identity: the semantics
+     * tree hangs off the same `LayoutNode` objects the slot tables emit, so no bounds
+     * matching is needed. Only the node's own layout node counts (after [collapse], the one
+     * the chain adopted): a `Button` does not take over its label `Text`, which stays its child.
+     */
+    fun attachText(node: TreeNode, lookup: (Any) -> NodeText?) {
+        node.ownLayoutNode?.let(lookup)?.let {
+            node.text = it.text
+            node.contentDescription = it.contentDescription
+        }
+        for (child in node.children) attachText(child, lookup)
+    }
+
+    /** `Text "Row 1" (Main.kt:12)`: the visible text, shortened, then the call site. */
+    fun labelOf(node: TreeNode): String = buildString {
+        append(node.kind)
+        val shown = node.text ?: node.contentDescription
+        if (shown != null) append(" \"").append(if (shown.length > LABEL_TEXT) shown.take(LABEL_TEXT - 1) + "…" else shown).append('"')
+        node.sourceFile?.let { append(" (").append(it).append(':').append(node.sourceLine).append(')') }
+    }
+
+    private const val LABEL_TEXT = 40
 
     /** Gives every node the nearest descendant layout node, so a call group can be moved too. */
     fun inheritLayoutNodes(node: TreeNode): Any? {
@@ -167,6 +241,7 @@ internal object TreeShape {
         out.append(",\"rootId\":").appendJsonString(root.id)
         meta.packageName?.let { out.append(",\"package\":").appendJsonString(it) }
         meta.pid?.let { out.append(",\"pid\":").append(it) }
+        meta.composeVersion?.let { out.append(",\"compose\":").appendJsonString(it) }
         out.append(",\"nodes\":{")
         var first = true
         walk(root) { node ->
@@ -194,8 +269,9 @@ internal object TreeShape {
         out.append(",\"depth\":").append(node.depth)
         out.append(",\"kind\":").appendJsonString(node.kind)
         val file = node.sourceFile
-        val label = if (file == null) node.kind else "${node.kind} ($file:${node.sourceLine})"
-        out.append(",\"label\":").appendJsonString(label)
+        out.append(",\"label\":").appendJsonString(labelOf(node))
+        node.text?.let { out.append(",\"text\":").appendJsonString(it) }
+        node.contentDescription?.let { out.append(",\"contentDescription\":").appendJsonString(it) }
         out.append(",\"bounds\":{\"x\":").append(node.box.left)
             .append(",\"y\":").append(node.box.top)
             .append(",\"w\":").append(node.box.width)

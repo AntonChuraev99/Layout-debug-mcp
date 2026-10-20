@@ -33,7 +33,9 @@ internal object LiveOverrides {
         nodes = captured
         for ((id, override) in overrides) {
             val node = nodes[id] ?: continue
-            apply(node, override, density)
+            runCatching { apply(node, override, density) }.onFailure {
+                logError(ComposeVersion.unsupported("re-applying the live edit of $id failed", it))
+            }
         }
     }
 
@@ -41,15 +43,20 @@ internal object LiveOverrides {
     fun applyOverride(params: Map<String, String>, density: Float): String {
         val id = params["id"] ?: return Json.error("missing parameter id")
         val node = nodes[id] ?: return Json.error("node $id is not in the last /tree capture; capture again")
-        if (ModifierAccess.of(node) == null) return Json.error("node $id has no modifier this agent can reach")
+        when (val lookup = ModifierAccess.lookup(node.javaClass)) {
+            is ModifierAccess.Lookup.Missing -> return Json.error(ComposeVersion.unsupported(lookup.what))
+            is ModifierAccess.Lookup.Found -> Unit
+        }
         val override = Override(
             dx = params["dx"]?.toIntOrNull() ?: 0,
             dy = params["dy"]?.toIntOrNull() ?: 0,
             w = params["w"]?.toIntOrNull() ?: -1,
             h = params["h"]?.toIntOrNull() ?: -1,
         )
+        runCatching { apply(node, override, density) }.onFailure {
+            return Json.error(ComposeVersion.unsupported("swapping LayoutNode.modifier by reflection failed", it.unwrap()))
+        }
         overrides[id] = override
-        apply(node, override, density)
         return "{\"ok\":true,\"id\":${Json.string(id)}}"
     }
 
@@ -57,14 +64,22 @@ internal object LiveOverrides {
     fun clear(): String {
         val count = overrides.size
         overrides.clear()
+        var failure: Throwable? = null
         for ((node, swap) in swaps) {
             val access = ModifierAccess.of(node) ?: continue
-            // A recomposition already wrote the source modifier back: leave that one alone.
-            if (access.get(node) === swap.applied) access.set(node, swap.base)
+            runCatching {
+                // A recomposition already wrote the source modifier back: leave that one alone.
+                if (access.get(node) === swap.applied) access.set(node, swap.base)
+            }.onFailure { failure = it.unwrap() }
         }
         swaps.clear()
+        failure?.let { return Json.error(ComposeVersion.unsupported("restoring LayoutNode.modifier by reflection failed", it)) }
         return "{\"ok\":true,\"cleared\":$count}"
     }
+
+    /** The real cause of a reflective call, not the InvocationTargetException around it. */
+    private fun Throwable.unwrap(): Throwable =
+        (this as? java.lang.reflect.InvocationTargetException)?.targetException ?: this
 
     /**
      * Prepending the tweak means it wraps the node's own modifier chain, so the whole
@@ -106,27 +121,41 @@ internal object ModifierAccess {
         }
     }
 
-    private val cache = HashMap<Class<*>, Accessors?>()
+    sealed interface Lookup {
+        class Found(val accessors: Accessors) : Lookup
+        /** What was looked for and not found, for the error the window shows. */
+        class Missing(val what: String) : Lookup
+    }
 
-    fun of(node: Any): Accessors? = synchronized(cache) {
-        cache.getOrPut(node.javaClass) {
-            val methods = node.javaClass.methods
-            val getter = methods.firstOrNull {
-                it.parameterCount == 0 &&
-                    it.name.startsWith("getModifier") &&
-                    Modifier::class.java.isAssignableFrom(it.returnType)
-            }
-            val setter = methods.firstOrNull {
-                it.parameterCount == 1 &&
-                    it.name.startsWith("setModifier") &&
-                    it.parameterTypes[0].isAssignableFrom(Modifier::class.java)
-            }
-            if (getter != null && setter != null) {
-                Accessors(getter, setter)
-            } else {
-                logError("no modifier accessors on ${node.javaClass.name}: live edits are unavailable for it")
-                null
-            }
+    private val cache = HashMap<Class<*>, Lookup>()
+
+    fun of(node: Any): Accessors? = (lookup(node.javaClass) as? Lookup.Found)?.accessors
+
+    /** Finds the accessors on [type]; the result (either way) is cached per class and logged once. */
+    fun lookup(type: Class<*>): Lookup = synchronized(cache) {
+        cache.getOrPut(type) {
+            find(type).also { if (it is Lookup.Missing) logError(ComposeVersion.unsupported(it.what)) }
         }
+    }
+
+    /** Pure reflection over [type]'s public methods; exported for tests. */
+    fun find(type: Class<*>): Lookup {
+        val methods = type.methods
+        val getter = methods.firstOrNull {
+            it.parameterCount == 0 &&
+                it.name.startsWith("getModifier") &&
+                Modifier::class.java.isAssignableFrom(it.returnType)
+        }
+        val setter = methods.firstOrNull {
+            it.parameterCount == 1 &&
+                it.name.startsWith("setModifier") &&
+                it.parameterTypes[0].isAssignableFrom(Modifier::class.java)
+        }
+        if (getter != null && setter != null) return Lookup.Found(Accessors(getter, setter))
+        val missing = listOfNotNull(
+            "getModifier*(): Modifier".takeIf { getter == null },
+            "setModifier*(Modifier)".takeIf { setter == null },
+        ).joinToString(" and ")
+        return Lookup.Missing("live edits are unavailable: ${type.name} has no public $missing")
     }
 }

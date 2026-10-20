@@ -16,6 +16,14 @@ android {
         versionCode = 1
         versionName = "1.0"
         manifestPlaceholders["layoutDebugPort"] = providers.gradleProperty("layoutDebugPort").getOrElse("8790")
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunnerArguments["layoutDebugPort"] = providers.gradleProperty("layoutDebugPort").getOrElse("8790")
+        // The compatibility matrix (CI) passes the Compose UI version it expects at runtime, so a
+        // dependency that pulls a newer Compose in cannot make a row test the wrong version.
+        providers.gradleProperty("expectedComposeUi").orNull?.let {
+            testInstrumentationRunnerArguments["expectedComposeUi"] = it
+        }
     }
 
     buildTypes {
@@ -39,9 +47,17 @@ android {
 }
 
 dependencies {
-    implementation(platform(libs.compose.bom))
+    // -PcomposeBom=<version> and -PactivityCompose=<version> build the sample against another
+    // Compose line: the compatibility matrix in .github/workflows/ci.yml and the README table.
+    val composeBom = providers.gradleProperty("composeBom").orNull
+    val activityCompose = providers.gradleProperty("activityCompose").orNull
+    if (composeBom != null) implementation(platform("androidx.compose:compose-bom:$composeBom")) else implementation(platform(libs.compose.bom))
     implementation(libs.compose.material3)
-    implementation(libs.activity.compose)
+    if (activityCompose != null) implementation("androidx.activity:activity-compose:$activityCompose") else implementation(libs.activity.compose)
+
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 
     // The two lines an app adds (from Maven Central: "io.github.antonchuraev99:layout-debug-agent:0.1.0").
     debugImplementation(project(":layout-debug-agent"))
