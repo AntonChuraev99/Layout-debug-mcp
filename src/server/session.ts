@@ -4,12 +4,14 @@ import type {
   EditRequest,
   ErrorCode,
   LayoutNode,
+  LiveEdit,
   NodeId,
   Override,
   Rect,
   RequestStatus,
   Snapshot,
 } from '../shared/protocol.ts'
+import { MAX_LIVE_EDITS, occurrenceOf } from '../shared/liveEdits.ts'
 
 /** Enough to catch up a window that reloaded, small enough to never think about. */
 const CHAT_HISTORY_LIMIT = 200
@@ -21,13 +23,22 @@ function capText(text: string, max: number): string {
 
 /**
  * Single in-memory session. Written by the UI over the WebSocket, read by the
- * MCP server over HTTP. Deliberately not persisted: overrides and
- * snapshots describe a running UI and are meaningless once it reloads.
+ * MCP server over HTTP. Deliberately not persisted to disk: overrides and
+ * snapshots describe a running UI. Only `liveEdits` is addressed by anchors, so it
+ * outlives a reload of the page and of the window (not a server restart).
  */
 export class Session {
   snapshot: Snapshot | null = null
   selectedId: NodeId | null = null
+  /** Live edits of the page on screen, by node id (what a request carries). */
   overrides: Override[] = []
+  /** Every live edit by anchors, resolved or not: the window re-applies it after a reload. */
+  liveEdits: LiveEdit[] = []
+
+  /** Replaces the list (the window always sends it whole), keeping the newest `MAX_LIVE_EDITS`. */
+  setLiveEdits(edits: LiveEdit[]) {
+    this.liveEdits = edits.slice(-MAX_LIVE_EDITS)
+  }
   requests: EditRequest[] = []
   /**
    * Kept server-side so the window survives a reload without losing the thread, and
@@ -71,7 +82,7 @@ export class Session {
    * Builds the artifact bundle that makes the whole tool worth having: not just
    * "the user said X" but which element, where it sits, and what moved.
    */
-  buildRequest(comment: string): EditRequest | null {
+  buildRequest(comment: string, page?: string): EditRequest | null {
     const snapshot = this.snapshot
     const node = this.selectedNode()
     if (!snapshot || !node) return null
@@ -109,7 +120,11 @@ export class Session {
       pxPerUnit: snapshot.pxPerUnit,
       consumed: false,
       status: 'queued',
+      // Which live edit is this element's: the page it was sent from and its place among
+      // same-anchor siblings (Android list items), so "done" takes only that one off the list.
+      occurrence: occurrenceOf(snapshot, node),
     }
+    if (page !== undefined) request.page = page
 
     this.requests.push(request)
     return request

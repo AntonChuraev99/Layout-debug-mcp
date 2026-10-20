@@ -116,6 +116,78 @@ export function checkStaticRequest(headers: Headers): Verdict {
   return checkHost(headers)
 }
 
+// --- framing probe and proxy --------------------------------------------------
+
+/** Host names that never leave the machine (URL `hostname`, so IPv6 keeps its brackets). */
+export function isLoopbackHostname(hostname: string): boolean {
+  const h = hostname.toLowerCase()
+  return h === 'localhost' || h.endsWith('.localhost') || h === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(h)
+}
+
+/**
+ * TLS for requests to the target (the framing probe and the proxy use the same rule): a dev
+ * server on loopback often has a self-signed certificate and its traffic never leaves the
+ * machine, so its certificate is not checked; any other host gets full checks.
+ */
+export function tlsOptionsFor(url: URL): { rejectUnauthorized: boolean } {
+  return { rejectUnauthorized: !isLoopbackHostname(url.hostname) }
+}
+
+export type ProbeVerdict = { ok: true; url: URL } | { ok: false; reason: string }
+
+/**
+ * GET /api/framing fetches the page the window is about to frame and reports its framing
+ * headers. Only the window can call it (checkApiRequest), and it fetches only loopback
+ * addresses and the configured target, so it can't be turned into a request to any host.
+ */
+export function checkProbeTarget(raw: string | null, allowedOrigins: readonly string[]): ProbeVerdict {
+  if (!raw) return { ok: false, reason: 'url is missing' }
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return { ok: false, reason: `"${raw.slice(0, 200)}" is not a URL` }
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return { ok: false, reason: `${url.protocol} is not http(s)` }
+  if (url.username || url.password) return { ok: false, reason: 'a URL with credentials is not probed' }
+  if (!isLoopbackHostname(url.hostname) && !allowedOrigins.includes(url.origin)) {
+    return { ok: false, reason: `${url.origin} is neither a loopback address nor the configured target` }
+  }
+  return { ok: true, url }
+}
+
+/**
+ * Every request to the framing proxy. It forwards to the configured target only, so it is
+ * never an open proxy: no CONNECT, no absolute-form request line (`GET http://other/ …`),
+ * and the Host must be the proxy itself on loopback (DNS rebinding, as for the server).
+ */
+export function checkProxyRequest(method: string | undefined, reqUrl: string | undefined, headers: Headers, proxyPort: number): Verdict {
+  if (method === 'CONNECT') return deny('CONNECT is not supported: this proxy forwards to the configured target only')
+  if (!reqUrl || !reqUrl.startsWith('/')) {
+    return deny(`request target "${(reqUrl ?? '').slice(0, 200)}" is not a path: this proxy forwards to the configured target only`)
+  }
+  const host = header(headers, 'host')?.trim().toLowerCase()
+  if (!host) return deny('no Host header')
+  const allowed = LOOPBACK_NAMES.map((name) => `${name}:${proxyPort}`)
+  if (!allowed.includes(host)) return deny(`Host "${host}" is not the framing proxy on loopback (looks like DNS rebinding)`)
+  return OK
+}
+
+/**
+ * The upstream URL for a proxied request path, or null when it would leave the target's
+ * origin (`//other.host/x` resolves to another host when parsed against a base).
+ */
+export function proxyUpstreamUrl(target: URL, reqUrl: string): URL | null {
+  if (!reqUrl.startsWith('/')) return null
+  let url: URL
+  try {
+    url = new URL(`${target.origin}${reqUrl}`)
+  } catch {
+    return null
+  }
+  return url.origin === target.origin ? url : null
+}
+
 // --- which file a static path names ----------------------------------------
 
 /**

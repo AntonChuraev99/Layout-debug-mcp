@@ -41,6 +41,12 @@ const SKIP_TAGS = new Set([
 
 const ids = new WeakMap<Element, NodeId>()
 let idSeq = 0
+/**
+ * This document. Node ids start over in every document (`n1`, `n2`…), so the window must
+ * know a snapshot comes from a new one — and it may get that snapshot before the frame's
+ * `load` event.
+ */
+const DOC_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 const overrides = new Map<NodeId, Override>()
 /** Element lookup for the current snapshot, so overrides can find their target. */
 let elementsById = new Map<NodeId, HTMLElement>()
@@ -246,6 +252,7 @@ function capture(): Snapshot {
 
   return {
     id: `snap-${Date.now()}`,
+    docId: DOC_ID,
     target: 'web',
     createdAt: Date.now(),
     unit: 'css-px',

@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { parsePort, SERVER_PORT } from '../shared/ports.ts'
+import { parsePort, SERVER_PORT, UI_PORT } from '../shared/ports.ts'
 import type { TargetKind } from '../shared/protocol.ts'
 import { isAndroidPackage } from './androidApp.ts'
 import { isScrcpyVersion } from './scrcpy.ts'
+import { isLoopbackHostname } from './security.ts'
 
 export interface Config {
   /** Which adapter drives the frame. */
@@ -36,12 +37,18 @@ export interface Config {
   configFile: string | null
   /** Exit after this long with no window and no waiting agent; 0 keeps running. */
   idleExitMs: number
+  /**
+   * Web target: port of the opt-in framing proxy on 127.0.0.1, or null when it is off. It
+   * serves `targetUrl`'s origin without the headers that forbid framing (src/server/framingProxy.ts).
+   */
+  framingProxyPort: number | null
 }
 
 type Env = Record<string, string | undefined>
 
 export const CONFIG_FILE_NAME = 'layout-debug.config.json'
 const DEFAULT_ANDROID_PORT = 8790
+export const DEFAULT_FRAMING_PROXY_PORT = 5176
 
 /** Every config problem is fatal at start: a typo must not silently become a default. */
 export class ConfigError extends Error {
@@ -65,6 +72,8 @@ interface FileConfig {
   androidPackage?: unknown
   scrcpyServer?: unknown
   scrcpyVersion?: unknown
+  framingProxy?: unknown
+  framingProxyPort?: unknown
 }
 
 /**
@@ -124,13 +133,12 @@ export function loadConfig(cwd: string = process.cwd(), env: Env = process.env):
     const source = envVersion ? 'LD_SCRCPY_VERSION' : from('scrcpyVersion')
     throw new ConfigError(`${source} is ${JSON.stringify(scrcpyVersion)}; expected a scrcpy version like "4.1"`)
   }
+  const targetUrl =
+    value(env.LD_TARGET_URL) ?? optionalString(file.data.targetUrl, from('targetUrl')) ?? `http://127.0.0.1:${SERVER_PORT}/demo/`
 
   return {
     target,
-    targetUrl:
-      value(env.LD_TARGET_URL) ??
-      optionalString(file.data.targetUrl, from('targetUrl')) ??
-      `http://127.0.0.1:${SERVER_PORT}/demo/`,
+    targetUrl,
     projectDir,
     androidPort,
     device: value(env.LD_DEVICE) ?? optionalString(file.data.device, from('device')) ?? null,
@@ -139,7 +147,77 @@ export function loadConfig(cwd: string = process.cwd(), env: Env = process.env):
     scrcpyVersion,
     configFile: file.found ? path : null,
     idleExitMs: parseIdleMinutes(env.LD_IDLE_EXIT_MINUTES) * 60_000,
+    framingProxyPort: framingProxyPort(env, file.data, from, target, targetUrl),
   }
+}
+
+/**
+ * LD_FRAMING_PROXY (`1`/`true` on, `0`/`false` off) over `"framingProxy": true|false`;
+ * the port from LD_FRAMING_PROXY_PORT over `"framingProxyPort"`. Off unless asked for.
+ */
+function framingProxyPort(
+  env: Env,
+  data: FileConfig,
+  from: (key: string) => string,
+  target: TargetKind,
+  targetUrl: string,
+): number | null {
+  // Validated even while the proxy is off: a typo must not wait to become a default.
+  let filePort: number | undefined
+  if (data.framingProxyPort !== undefined) {
+    const p = data.framingProxyPort
+    if (typeof p !== 'number' || !Number.isInteger(p) || p < 1 || p > 65535) {
+      throw new ConfigError(`${from('framingProxyPort')} is ${JSON.stringify(p)}; expected an integer port number from 1 to 65535`)
+    }
+    filePort = p
+  }
+  let port: number
+  try {
+    port = parsePort(env.LD_FRAMING_PROXY_PORT, 'LD_FRAMING_PROXY_PORT', filePort ?? DEFAULT_FRAMING_PROXY_PORT)
+  } catch (err) {
+    throw new ConfigError((err as Error).message.replace(/^\[layout-debug\] /, ''))
+  }
+
+  let on: boolean
+  const raw = value(env.LD_FRAMING_PROXY)
+  if (raw !== undefined) {
+    if (!/^(1|0|true|false)$/i.test(raw)) {
+      throw new ConfigError(`LD_FRAMING_PROXY="${raw}"; expected 1 or 0 (true or false)`)
+    }
+    on = raw === '1' || raw.toLowerCase() === 'true'
+  } else if (data.framingProxy !== undefined && data.framingProxy !== null) {
+    if (typeof data.framingProxy !== 'boolean') {
+      throw new ConfigError(`${from('framingProxy')} is ${JSON.stringify(data.framingProxy)}; expected true or false`)
+    }
+    on = data.framingProxy
+  } else {
+    on = false
+  }
+  if (!on) return null
+
+  const source = raw !== undefined ? 'LD_FRAMING_PROXY' : from('framingProxy')
+  if (target !== 'web') throw new ConfigError(`${source} is on, but the framing proxy is for the web target (target is "${target}")`)
+  let url: URL | null = null
+  try {
+    url = new URL(targetUrl)
+  } catch {
+    // reported below
+  }
+  if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
+    throw new ConfigError(`${source} is on, but the target URL "${targetUrl}" is not an http(s) address to proxy`)
+  }
+
+  if (port === SERVER_PORT || port === UI_PORT) {
+    throw new ConfigError(
+      `the framing proxy port ${port} is also the ${port === SERVER_PORT ? 'server' : 'window'} port; set LD_FRAMING_PROXY_PORT to another one`,
+    )
+  }
+  // The target itself listens on loopback:<port>: the proxy can't take that port.
+  const targetPort = Number(url.port || (url.protocol === 'https:' ? 443 : 80))
+  if (targetPort === port && isLoopbackHostname(url.hostname)) {
+    throw new ConfigError(`the framing proxy port ${port} is the target's own port (${url.origin}); set LD_FRAMING_PROXY_PORT to another one`)
+  }
+  return port
 }
 
 function optionalString(v: unknown, where: string): string | undefined {

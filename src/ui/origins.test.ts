@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { frameOrigin, serverOrigin } from './origins.ts'
+import { frameOrigin, frameSrcFor, serverOrigin } from './origins.ts'
+
+describe('frameSrcFor', () => {
+  const proxy = { origin: 'http://127.0.0.1:5176', target: 'http://localhost:5173' }
+  test('the proxied target loads through the proxy, path, query and hash kept', () => {
+    assert.equal(frameSrcFor('http://localhost:5173/cart?x=1#top', proxy), 'http://127.0.0.1:5176/cart?x=1#top')
+    assert.equal(frameSrcFor('http://localhost:5173', proxy), 'http://127.0.0.1:5176/')
+  })
+  test('any other origin, no proxy, or no address: as it is', () => {
+    assert.equal(frameSrcFor('http://localhost:3000/', proxy), 'http://localhost:3000/')
+    assert.equal(frameSrcFor('http://127.0.0.1:5173/', proxy), 'http://127.0.0.1:5173/', 'another host name is another origin')
+    assert.equal(frameSrcFor('http://localhost:5173/', null), 'http://localhost:5173/')
+    assert.equal(frameSrcFor('', proxy), '')
+    assert.equal(frameSrcFor('not a url', proxy), 'not a url')
+  })
+})
 
 describe('frameOrigin', () => {
   test('http(s) pages: scheme, host and port, nothing of the path', () => {

@@ -152,6 +152,17 @@ const en = {
   'banner.title': "The inspector didn't respond",
   'banner.text':
     "The page opened, but its layers aren't visible: the inspector script isn't in it. Add it to index.html and reload the page.",
+  'status.frameBlocked': 'Page forbids framing',
+  'framing.title': "The page can't be shown in a frame",
+  'framing.text': 'It sends {header}, so the browser refuses to show it inside this window and the inspector never starts.',
+  'framing.fix':
+    'Turn on the framing proxy for this page: add this to the MCP client\'s env (or set "framingProxy": true and "targetUrl" in layout-debug.config.json), then restart the layout-debug server.',
+  'framing.fixNote':
+    'The proxy listens on 127.0.0.1, forwards to this target only and drops only the framing headers. Or allow framing in your dev server for development.',
+  'framing.otherTarget':
+    'The framing proxy is on for {target} only. To open this page through it, set this in the MCP client\'s env (or "targetUrl" in layout-debug.config.json) and restart the server.',
+  'framing.redirectedAway':
+    'The page redirected to {origin}, which the framing proxy doesn\'t cover (it serves {target}). Make your dev server redirect with a relative path, or make that origin the target in the MCP client\'s env and restart the server.',
 
   // --- shared ---
   'common.close': 'Close',
@@ -268,6 +279,25 @@ const en = {
   'tag.error': 'Error',
   'tag.dismissed': 'Not waiting',
   'tag.stale': 'No reply',
+
+  // --- live edit list ---
+  'edits.title': 'Live edits',
+  'edits.count': { one: '{count} live edit', other: '{count} live edits' },
+  'edits.missingCount': { one: '{count} not found on the page', other: '{count} not found on the page' },
+  'edits.copyAll': 'Copy all edits',
+  'edits.copyMarkdown': 'Markdown',
+  'edits.copyJson': 'JSON',
+  'edits.copiedMarkdown': 'Copied as Markdown',
+  'edits.copiedJson': 'Copied as JSON',
+  'edits.emptyTitle': 'No live edits',
+  'edits.emptySub': 'Move, resize or hide a layer. The edit is kept here and comes back after the page reloads.',
+  'edits.missing': 'Not found on the page',
+  'edits.missingNote': "The page reloaded without these elements, so their edits aren't applied. The next reload tries again.",
+  'edits.discard': 'Discard',
+  'edits.discardMissing': { one: 'Discard {count}', other: 'Discard all {count}' },
+  'edits.here': 'On this page',
+  'edits.reset': 'Reset',
+  'edits.elsewhere': 'Other pages',
 
   // --- relative time ---
   'ago.now': 'just now',
@@ -415,6 +445,17 @@ const ru: Shape<typeof en> = {
   'banner.title': 'Инспектор не отозвался',
   'banner.text':
     'Страница открылась, но слои не видны: в неё не встроен скрипт инспектора. Добавь его в index.html и обнови страницу.',
+  'status.frameBlocked': 'Страница запрещает встраивание',
+  'framing.title': 'Страницу нельзя показать во фрейме',
+  'framing.text': 'Она отдаёт {header}, поэтому браузер не показывает её внутри этого окна и инспектор не запускается.',
+  'framing.fix':
+    'Включи прокси для встраивания этой страницы: добавь это в env MCP-клиента (или "framingProxy": true и "targetUrl" в layout-debug.config.json) и перезапусти сервер layout-debug.',
+  'framing.fixNote':
+    'Прокси слушает 127.0.0.1, ходит только на эту цель и убирает только заголовки встраивания. Или разреши встраивание в настройках dev-сервера на время разработки.',
+  'framing.otherTarget':
+    'Прокси для встраивания включён только для {target}. Чтобы открыть через него эту страницу, задай это в env MCP-клиента (или "targetUrl" в layout-debug.config.json) и перезапусти сервер.',
+  'framing.redirectedAway':
+    'Страница перенаправила на {origin}, а прокси для встраивания его не покрывает (он обслуживает {target}). Сделай редирект в dev-сервере относительным или укажи этот origin целью в env MCP-клиента и перезапусти сервер.',
 
   'common.close': 'Закрыть',
   'common.more': 'Ещё {count}',
@@ -528,6 +569,30 @@ const ru: Shape<typeof en> = {
   'tag.error': 'Ошибка',
   'tag.dismissed': 'Не ждём',
   'tag.stale': 'Без ответа',
+
+  // --- список живых правок ---
+  'edits.title': 'Живые правки',
+  'edits.count': { one: '{count} живая правка', few: '{count} живые правки', many: '{count} живых правок', other: '{count} живой правки' },
+  'edits.missingCount': {
+    one: '{count} не найдена на странице',
+    few: '{count} не найдены на странице',
+    many: '{count} не найдено на странице',
+    other: '{count} не найдено на странице',
+  },
+  'edits.copyAll': 'Скопировать все правки',
+  'edits.copyMarkdown': 'Markdown',
+  'edits.copyJson': 'JSON',
+  'edits.copiedMarkdown': 'Скопировано как Markdown',
+  'edits.copiedJson': 'Скопировано как JSON',
+  'edits.emptyTitle': 'Живых правок нет',
+  'edits.emptySub': 'Сдвинь, измени размер или скрой слой. Правка сохранится здесь и вернётся после перезагрузки страницы.',
+  'edits.missing': 'Не найдены на странице',
+  'edits.missingNote': 'Страница перезагрузилась без этих элементов, поэтому их правки не применены. Следующая перезагрузка попробует снова.',
+  'edits.discard': 'Убрать',
+  'edits.discardMissing': { one: 'Убрать {count}', few: 'Убрать все {count}', many: 'Убрать все {count}', other: 'Убрать все {count}' },
+  'edits.here': 'На этой странице',
+  'edits.reset': 'Сбросить',
+  'edits.elsewhere': 'Другие страницы',
 
   'ago.now': 'только что',
   'ago.min': '{count} мин',
