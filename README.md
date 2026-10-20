@@ -275,6 +275,16 @@ Appears next to the selected element, with breadcrumbs of its parents on top:
 | Stop waiting | Removes the "agent is editing" mark if the agent never replied |
 | Details | Box, source, classes, path, live edits, and the "Inside" list of children |
 
+### Live edits that survive a reload
+
+Every live edit is also kept on the server by its element's anchors (path, source location, test id). When the page reloads — your dev server's full reload, the page reloading itself, the window's own refresh, or the window itself reloading — the window finds each element again and puts its edit back. The **Live edits** button in the header (the move icon, with a count) lists them:
+
+- **Not found on the page** — the reload brought no element with that anchor. The edit is kept, not applied, and tried again on the next reload; **Discard** forgets it. The count turns amber while there are any.
+- **On this page** — applied now; **Reset** takes it off, like Reset edits in the palette.
+- **Copy all edits** — the whole list as **Markdown** (to paste into any agent) or **JSON**. Page text inside is quoted, capped and marked as untrusted data, as in the MCP tools.
+
+An edit sent to the agent leaves the list once the agent replies, so it never comes back on top of the code version. `GET /api/live-edits` returns the list, `DELETE /api/live-edits` discards all of it.
+
 ### Element chat, shimmer and auto refresh
 
 <p>
@@ -315,7 +325,22 @@ The window is in English by default. The `EN | RU` switch in the header changes 
 
    or set `LD_TARGET_URL` in the client's `env`, or paste the URL into the window's **Page address** field.
 
-For source mapping add a build step that writes `data-source-loc="file:line"` on JSX elements; without it the agent finds the element by `data-testid`, id and the class string.
+3. Optional, for `file:line` on React / JSX: add the bundled dev-only plugin. It writes `data-source-loc="src/App.tsx:42"` (relative to the project root) on every host element (`<div>`, `<button>`, not `<Card>` or fragments) and keeps one you wrote yourself. It needs `@babel/core` in your project (`npm i -D layout-debug-mcp @babel/core`; the MCP server itself never installs Babel).
+
+   **Vite** (`vite.config.ts`): only `vite dev` runs it (`apply: 'serve'`), `vite build` output has no attribute.
+
+   ```ts
+   import sourceLoc from 'layout-debug-mcp/vite'
+   export default defineConfig({ plugins: [sourceLoc(), react()] })
+   ```
+
+   **Next.js / webpack / Babel** (`babel.config.js`): active only when `BABEL_ENV` (else `NODE_ENV`) is explicitly `development`, which `next dev` sets, so `next build` stays clean. With neither set (e.g. a bare `webpack --mode production`) it stays off and prints one warning; run your dev server with `NODE_ENV=development`. A Babel config makes Next.js use Babel instead of SWC for your files (with webpack fully, with Turbopack since Next.js 16 next to SWC), so builds get slower.
+
+   ```js
+   module.exports = { presets: ['next/babel'], plugins: ['layout-debug-mcp/babel'] }
+   ```
+
+   Both take `{ root }` (absolute, or relative to the project root, e.g. `'../..'` for a monorepo root) when paths should start from another folder. A file Babel can't parse is served unchanged, with a warning naming it. Without the plugin the agent finds the element by `data-testid`, id and the class string.
 
 ### Pages that forbid framing
 
@@ -434,9 +459,10 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 
 ## Limitations
 
-- Live edits are a **preview**, not code: they vanish on page reload or app rebuild until the agent writes them into the source.
+- Live edits are a **preview**, not code. They come back after a page or window reload (see [Live edits that survive a reload](#live-edits-that-survive-a-reload)), but they live in the server's memory: restarting the server loses them unless a window that still has them reconnects. Copy them out or send them to the agent to keep them.
+- Android: the same list is put back when the window starts and when the app restarts (a new pid from the on-device agent); not verified on a real device yet. When the agent does not report its pid, an app restart is not detected: reload the window to put the edits back.
 - The agent has to be listening. Some agents stop the loop on their own after a while; if the header says **No agent listening**, ask again. A request the agent took stays "Agent editing" until it replies with its `requestId`, or you press "Stop waiting".
-- **Web:** the page is shown in an `iframe`; a target that sends `X-Frame-Options` / `frame-ancestors` needs the [framing proxy](#pages-that-forbid-framing), one target per server start. Through it the page runs on the proxy's origin, so OAuth redirect URIs and absolute URLs the page builds from its own config still point at the original address. Its cookies are renamed with a `ldp<port>_` prefix (page code reading them by name sees the prefixed name), only those reach the target, and non-HttpOnly ones are readable by other pages on `127.0.0.1`, which browsers don't separate by port. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs your own `data-source-loc` build step (no plugin shipped yet). In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
+- **Web:** the page is shown in an `iframe`; a target that sends `X-Frame-Options` / `frame-ancestors` needs the [framing proxy](#pages-that-forbid-framing), one target per server start. Through it the page runs on the proxy's origin, so OAuth redirect URIs and absolute URLs the page builds from its own config still point at the original address. Its cookies are renamed with a `ldp<port>_` prefix (page code reading them by name sees the prefixed name), only those reach the target, and non-HttpOnly ones are readable by other pages on `127.0.0.1`, which browsers don't separate by port. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs `data-source-loc` on the page: the bundled plugin covers React / JSX with Vite or Babel; other stacks (Vue, Svelte, SWC-only builds) need their own build step. In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
 - **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
 
 ## Troubleshooting
@@ -464,7 +490,7 @@ Pre-1.0. Next up:
 3. Clean-machine install checks with Cursor, VS Code, Codex CLI and other clients.
 4. Live video stream from the device over scrcpy (H.264 decoded in the browser with WebCodecs) instead of refreshed snapshots.
 
-Later, driven by demand: before/after snapshot diff, a source-location plugin for Vite/Babel, Compose Desktop, Android Views, Flutter.
+Later, driven by demand: before/after snapshot diff, Compose Desktop, Android Views, Flutter.
 
 ## Contributing
 

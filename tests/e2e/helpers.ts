@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { expect, test as base, type Locator, type Page } from '@playwright/test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import type { EditRequest, LayoutNode, Snapshot } from '../../src/shared/protocol.ts'
+import type { EditRequest, LayoutNode, LiveEdit, Snapshot } from '../../src/shared/protocol.ts'
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 export const FIXTURES = join(ROOT, 'tests/e2e/fixtures')
@@ -86,8 +86,24 @@ export async function waitForServerSnapshot(since: number, has: (n: LayoutNode) 
   return found!
 }
 
-/** Shared test: waits once per worker until the server behind the UI answers. */
-export const test = base.extend<object, { serverReady: void }>({
+/** The live edit list the server keeps for re-applying after a reload. */
+export async function serverLiveEdits(): Promise<LiveEdit[]> {
+  return (await api<{ edits: LiveEdit[] }>('/api/live-edits')).edits
+}
+
+/**
+ * Shared test: waits once per worker until the server behind the UI answers, and starts
+ * every test without live edits — the server keeps them across window and page reloads,
+ * so one test's drag would otherwise come back in the next test's window.
+ */
+export const test = base.extend<{ noLiveEdits: void }, { serverReady: void }>({
+  noLiveEdits: [
+    async ({}, use) => {
+      await api('/api/live-edits', { method: 'DELETE' })
+      await use()
+    },
+    { auto: true },
+  ],
   serverReady: [
     async ({}, use) => {
       await expect

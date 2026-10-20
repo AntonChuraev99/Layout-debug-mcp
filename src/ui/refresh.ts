@@ -1,5 +1,4 @@
-import type { Anchors, EditRequest, NodeId, Override, Snapshot, TargetKind } from '../shared/protocol.ts'
-import { findNode } from './thread.ts'
+import type { EditRequest, NodeId, Override, Snapshot, TargetKind } from '../shared/protocol.ts'
 
 /**
  * What the window does once the agent says it is done with an edit:
@@ -120,26 +119,4 @@ export function overlaySource<S extends { createdAt: number }, O>(
  */
 export function showsConnecting(s: { url: string; connected: boolean; silent: boolean; swapping: boolean }): boolean {
   return Boolean(s.url) && !s.connected && !s.silent && !s.swapping
-}
-
-export interface CarriedOverride {
-  override: Override
-  /** Where the edit was, in the page that is about to go away. */
-  anchors: Anchors
-}
-
-/**
- * Re-addresses live edits from the page before a reload to the page after it. Node ids
- * do not survive a reload; the element is found again by its anchors. An edit whose
- * element is gone is counted, not dropped silently.
- */
-export function reapplyPlan(carried: readonly CarriedOverride[], snapshot: Snapshot): { apply: Override[]; lost: number } {
-  const apply: Override[] = []
-  let lost = 0
-  for (const c of carried) {
-    const node = findNode(snapshot, { id: c.override.nodeId, anchors: c.anchors })
-    if (node) apply.push({ ...c.override, nodeId: node.id })
-    else lost++
-  }
-  return { apply, lost }
 }

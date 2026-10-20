@@ -23,15 +23,15 @@ import { useAltKey } from './useAltKey.ts'
 import {
   decideRefresh,
   overridesHandedOver,
-  reapplyPlan,
   frameStack,
   overlaySource,
   REFRESH_NOTE_PREFIX,
   showsConnecting,
   snapshotFingerprint,
-  type CarriedOverride,
   type HeldView,
 } from './refresh.ts'
+import { dropHandedOver, editIsNode, externalListPlan, restorePlan, sameEdits, syncEdits, type LiveEdit } from '../shared/liveEdits.ts'
+import { LiveEditsPanel } from './LiveEditsPanel.tsx'
 import {
   analyzeChat,
   bestAnchor,
@@ -225,7 +225,7 @@ export function App() {
   const [focusRequest, setFocusRequest] = useState<{ row: 'first' | 'chat'; nonce: number } | null>(null)
   /** Text typed in the palette's field; it belongs to the selected element and is dropped with it. */
   const [paletteDraft, setPaletteDraft] = useState('')
-  const [popover, setPopover] = useState<'inbox' | 'status' | 'agent' | null>(null)
+  const [popover, setPopover] = useState<'inbox' | 'status' | 'agent' | 'edits' | null>(null)
 
   const [androidOverrides, setAndroidOverrides] = useState<Record<NodeId, Override>>({})
   const [dismissed, setDismissed] = useState<Set<string>>(readDismissed)
@@ -239,10 +239,31 @@ export function App() {
   const [notes, setNotes] = useState<RefreshNote[]>([])
   const sessionStart = useRef(Date.now())
   const cycle = useRef<RefreshCycle | null>(null)
-  /** Live edits to put back once the reloaded page is in (they would be lost with the old document). */
-  const carried = useRef<{ list: CarriedOverride[]; lost: number; requests: EditRequest[] } | null>(null)
-  /** When the reloaded frame fired `load`; a snapshot older than this is from the page that went away. */
+  /** When the frame the window reloaded itself fired `load`: the refresh ends with the first snapshot after it. */
   const reloadLoadedAt = useRef<number | null>(null)
+
+  /**
+   * Every live edit by its element's anchors (src/shared/liveEdits.ts). The page holds the
+   * edits by node id and loses them on reload; this list is kept in step with it, mirrored
+   * to the server, and put back on every page that comes in. The ref is what timers and
+   * effects read; the state is what the panel draws.
+   */
+  const [liveEdits, setLiveEdits] = useState<LiveEdit[]>([])
+  const editsRef = useRef<LiveEdit[]>([])
+  /**
+   * Which page the window shows now (`tokenOf`): on web the inspector's per-document id —
+   * a new document is a new page whether its first snapshot comes before or after the
+   * frame's `load`; on Android a count that bumps on the first device snapshot of a window
+   * session or of a restarted app (`pageGen`, also the web fallback for an inspector without
+   * document ids). The list follows the page only once it was put back on it (`restored`);
+   * before that the page's empty edits mean "not restored yet", not "the user reset everything".
+   */
+  const pageGen = useRef(0)
+  const pageLoadedAt = useRef(0)
+  /** The page (document and address) the list was last put back on. */
+  const restored = useRef<{ token: string; page: string } | null>(null)
+  /** Elements whose edit went to the code with a finished request: still on the page until the refresh, never put back. */
+  const handedRef = useRef<Set<NodeId>>(new Set())
 
   // First `ready` from the server seeds the web target URL from config.
   const seeded = useRef(false)
@@ -465,16 +486,102 @@ export function App() {
     [],
   )
 
-  // The device keeps its tweaks across a desktop reload, but the ids that addressed
-  // them are gone — so the first snapshot of a session resets the device to a state
-  // the window can actually manage.
-  const androidSynced = useRef(false)
+  // --- live edits that outlive a reload ---
+  /** What the list is keyed by: the address the window opened (web), one device app (Android). */
+  const editPage = isAndroid ? 'android' : url
+  const tokenOf = (snap: Snapshot | null): string =>
+    isAndroid ? `a${pageGen.current}` : snap?.docId ?`d${snap.docId}` : `w${pageGen.current}`
+  const commitEdits = useStableCallback((next: LiveEdit[], share = true) => {
+    const prev = editsRef.current
+    if (JSON.stringify(prev) === JSON.stringify(next)) return
+    // The node ids this page has now are kept locally (Reset finds the element by them);
+    // they alone are no news for the server or another window, which number nodes their own way.
+    const news = !sameEdits(prev, next)
+    editsRef.current = next
+    setLiveEdits(next)
+    if (share && news) send({ t: 'liveEdits', edits: next })
+  })
+
+  // The page's edits changed (a drag, a reset, a recapture with new boxes): the list follows,
+  // once the edits were put back on this page. Declared before the restore effects, so the
+  // render that restores does not sync the page's still-empty edits over the list.
+  const pageSnapshot = isAndroid ? state.androidSnapshot : web.snapshot
+  const pageOverrides = isAndroid ? androidOverrides : web.overrides
   useEffect(() => {
-    if (!isAndroid || !state.androidSnapshot || androidSynced.current) return
+    // A snapshot of a document the list was not put back on yet is not "the user reset
+    // everything" (its node ids even name other elements); another address in the frame is
+    // another page, even before its document loads.
+    if (!pageSnapshot || restored.current?.token !== tokenOf(pageSnapshot) || restored.current.page !== editPage) return
+    for (const id of handedRef.current) if (!pageOverrides[id]) handedRef.current.delete(id)
+    commitEdits(syncEdits(editsRef.current, pageOverrides, pageSnapshot, editPage, handedRef.current))
+  }, [pageOverrides, pageSnapshot, editPage, commitEdits])
+
+  // The server's list: on connect (`seed`) and when another window or `DELETE /api/live-edits` changed it.
+  useEffect(() => {
+    const list = state.liveEdits
+    if (!list) return
+    if (state.liveEditsFrame.seed) {
+      // A restarted server comes back empty; this window still knows the edits: give them back.
+      if (!list.length && editsRef.current.length) {
+        send({ t: 'liveEdits', edits: editsRef.current })
+        return
+      }
+      commitEdits(list, false)
+      return
+    }
+    commitEdits(list, false)
+    // Changed from outside (another window, DELETE /api/live-edits): this page follows both
+    // ways — what left the list comes off, what this page has in the list goes on. Otherwise the
+    // next sync here would read an entry missing from the page as a reset and drop it for all.
+    const L = live.current
+    const snap = L.isAndroid ? L.androidSnapshot : L.webSnapshot
+    if (!snap || restored.current?.token !== tokenOf(snap) || restored.current.page !== editPage) return
+    const current = L.isAndroid ? L.androidOverrides : L.web.overrides
+    const plan = externalListPlan(list, snap, editPage, current)
+    if (L.isAndroid) {
+      if (!plan.clear.length && !plan.apply.length) return
+      // The device agent has no per-node undo: clear everything, then put the result back.
+      const next = { ...current }
+      for (const id of plan.clear) delete next[id]
+      for (const o of plan.apply) next[o.nodeId] = o
+      setAndroidOverrides(next)
+      if (plan.clear.length) {
+        for (const id of plan.clear) dropOriginGhost(id)
+        L.send({ t: 'androidClearOverrides' })
+        for (const o of Object.values(next)) L.send({ t: 'androidOverride', override: o })
+      } else {
+        for (const o of plan.apply) L.send({ t: 'androidOverride', override: o })
+      }
+      return
+    }
+    for (const id of plan.clear) L.web.clearOverride(id)
+    for (const o of plan.apply) L.web.setOverride(o)
+    // Only a new frame matters; the rest is read when it lands.
+  }, [state.liveEditsFrame.seq])
+
+  // Android: the device keeps its tweaks across a desktop reload, but the ids that addressed
+  // them are gone; a restarted app (new pid) has none. Either way the first snapshot resets the
+  // device to a state the window manages and puts the list back on it, found by anchors.
+  const androidSynced = useRef(false)
+  const androidPid = state.app?.pid ?? null
+  const lastPid = useRef<number | null>(null)
+  useEffect(() => {
+    const snap = state.androidSnapshot
+    if (!isAndroid || !snap || state.liveEdits === null) return
+    const restarted = androidSynced.current && androidPid !== null && lastPid.current !== null && androidPid !== lastPid.current
+    if (androidPid !== null) lastPid.current = androidPid
+    if (androidSynced.current && !restarted) return
     androidSynced.current = true
-    send({ t: 'androidClearOverrides' })
+    pageGen.current++
+    handedRef.current = new Set()
+    const plan = restorePlan(editsRef.current, snap, editPage)
+    setAndroidOverrides(Object.fromEntries(plan.apply.map((o) => [o.nodeId, o])))
     setOriginGhosts({})
-  }, [isAndroid, state.androidSnapshot, send])
+    send({ t: 'androidClearOverrides' })
+    for (const o of plan.apply) send({ t: 'androidOverride', override: o })
+    commitEdits(plan.edits)
+    restored.current = { token: tokenOf(snap), page: editPage }
+  }, [isAndroid, state.androidSnapshot, state.liveEdits, androidPid, send])
 
   useEffect(() => {
     send({ t: 'select', nodeId: selectedId })
@@ -655,16 +762,8 @@ export function App() {
       return
     }
     // A reload starts a new document without the window's inline styles: the edits the
-    // agent got go with it on purpose, the others are carried over to the new page.
-    const list: CarriedOverride[] = []
-    let lost = 0
-    for (const o of Object.values(L.overrides)) {
-      if (handed.has(o.nodeId)) continue
-      const anchors = L.webSnapshot?.nodes[o.nodeId]?.anchors
-      if (anchors) list.push({ override: o, anchors })
-      else lost++
-    }
-    carried.current = list.length || lost ? { list, lost, requests: [...c.requests] } : null
+    // agent got go with it on purpose (they left the list at "done"), the others come back
+    // from the list once the new page is in.
     reloadLoadedAt.current = null
     c.phase = 'fresh'
     c.timer = window.setTimeout(() => finishCycle(true), REFRESH_TIMEOUT_MS)
@@ -678,6 +777,11 @@ export function App() {
   const startRefresh = (requests: EditRequest[]) => {
     const L = live.current
     setHolding((s) => new Set([...s, ...requests.map((r) => r.id)]))
+    // The element's own edit is in the code now: it leaves the list at once, so no reload —
+    // the window's own or one the dev server starts during the grace — puts it back. On the
+    // page it stays until the refresh shows the code version.
+    for (const id of overridesHandedOver(L.overrides, requests)) handedRef.current.add(id)
+    commitEdits(dropHandedOver(editsRef.current, requests))
     const c = cycle.current
     if (c) {
       c.requests.push(...requests)
@@ -688,11 +792,8 @@ export function App() {
       } else if (c.phase === 'grace') {
         window.clearTimeout(c.timer)
         c.timer = window.setTimeout(afterGrace, HMR_GRACE_MS)
-      } else if (carried.current) {
-        // Already reloading: what these requests carried must not come back on the new page.
-        const handed = overridesHandedOver(Object.fromEntries(carried.current.list.map((x) => [x.override.nodeId, x.override])), requests)
-        carried.current.list = carried.current.list.filter((x) => !handed.has(x.override.nodeId))
       }
+      // Already reloading: these requests' edits left the list above, so they stay off the new page.
       return
     }
     if (L.isAndroid) {
@@ -719,22 +820,30 @@ export function App() {
     }
   }
 
-  // The reloaded page is in: put the carried edits back, then let the blur go.
+  // A page came in — any load: the window's own refresh, the dev server's full reload, the
+  // page reloading itself. The first snapshot of its document gets the list back, found by
+  // anchors, even when it arrives before the frame's `load`; what is not found stays listed as
+  // unresolved. A refresh the window started ends here too.
   useEffect(() => {
     const snap = web.snapshot
-    const loadedAt = reloadLoadedAt.current
-    if (isAndroid || !snap || loadedAt === null || snap.createdAt < loadedAt) return
-    reloadLoadedAt.current = null
-    const pending = carried.current
-    carried.current = null
-    if (pending) {
-      const { apply, lost } = reapplyPlan(pending.list, snap)
-      for (const o of apply) web.setOverride(o)
-      if (lost + pending.lost) addNotes(pending.requests, 'refresh.lostEdits', lost + pending.lost)
+    // Without a document id (an older inspector), only the load time tells the documents apart.
+    if (isAndroid || !snap || (!snap.docId && snap.createdAt < pageLoadedAt.current)) return
+    const fresh = cycle.current?.target === 'web' && cycle.current.phase === 'fresh' ? cycle.current : null
+    const token = tokenOf(snap)
+    if (restored.current?.token !== token && state.liveEdits !== null) {
+      restored.current = { token, page: editPage }
+      handedRef.current = new Set()
+      const plan = restorePlan(editsRef.current, snap, editPage, web.overrides)
+      for (const o of plan.apply) web.setOverride(o)
+      commitEdits(plan.edits)
+      if (plan.lost && fresh) addNotes(fresh.requests, 'refresh.lostEdits', plan.lost)
     }
-    if (cycle.current?.target === 'web' && cycle.current.phase === 'fresh') finishCycle(false)
-    // Only a new snapshot matters; the helpers read current state through refs.
-  }, [isAndroid, web.snapshot])
+    const loadedAt = reloadLoadedAt.current
+    if (loadedAt === null || snap.createdAt < loadedAt) return
+    reloadLoadedAt.current = null
+    if (fresh) finishCycle(false)
+    // Only a new snapshot (or the server's list arriving) matters; the helpers read current state through refs.
+  }, [isAndroid, web.snapshot, state.liveEdits])
 
   useEffect(() => {
     const c = cycle.current
@@ -743,7 +852,6 @@ export function App() {
 
   // Another page (or target) makes a pending refresh meaningless; its edits belong to the old one.
   useEffect(() => {
-    carried.current = null
     reloadLoadedAt.current = null
     setSwap(null)
     finishCycle(false)
@@ -1096,7 +1204,7 @@ export function App() {
     if (!isAndroid) send({ t: 'snapshot', snapshot })
     send({ t: 'select', nodeId: selected.id })
     send({ t: 'overrides', overrides: overrideList })
-    if (!submit(text)) entry.failed = t('send.offline')
+    if (!submit(text, editPage)) entry.failed = t('send.offline')
     setLocal((l) => [...l, entry])
   }
 
@@ -1472,6 +1580,23 @@ export function App() {
     [inboxItems, loose, state.listening, onOpenFromInbox, openAgentHelp],
   )
   const agentContent = useMemo(() => <AgentPopoverBody listening={state.listening} />, [state.listening])
+  const editsMissing = liveEdits.filter((e) => e.page === editPage && !e.resolved).length
+  const editsInfo = useMemo(() => ({ count: liveEdits.length, missing: editsMissing }), [liveEdits.length, editsMissing])
+  const onEditsToggle = useCallback((open: boolean) => setPopover(open ? 'edits' : null), [])
+  // An edit on the page goes the way Reset edits does (the list follows the page); one that is
+  // not on the page only leaves the list.
+  const onResetEdit = useStableCallback((e: LiveEdit) => {
+    const current = isAndroid ? androidOverrides : web.overrides
+    const snap = isAndroid ? state.androidSnapshot : web.snapshot
+    const node = snap ? Object.values(current).map((o) => snap.nodes[o.nodeId]).find((n) => n && editIsNode(e, snap, n)) : undefined
+    if (node) clearOverride(node.id)
+    else commitEdits(editsRef.current.filter((x) => x !== e))
+  })
+  const onDiscardEdits = useStableCallback((gone: LiveEdit[]) => commitEdits(editsRef.current.filter((x) => !gone.includes(x))))
+  const editsContent = useMemo(
+    () => <LiveEditsPanel edits={liveEdits} page={editPage} onReset={onResetEdit} onDiscard={onDiscardEdits} />,
+    [liveEdits, editPage, onResetEdit, onDiscardEdits],
+  )
   const overlayOffset = useMemo(() => ({ x: device.x, y: device.y }), [device.x, device.y])
   const selectedNodeId = selected?.id ?? null
   const overlayUnread = useMemo(
@@ -1515,6 +1640,10 @@ export function App() {
         inboxOpen={popover === 'inbox'}
         onInboxToggle={onInboxToggle}
         inboxContent={inboxContent}
+        edits={editsInfo}
+        editsOpen={popover === 'edits'}
+        onEditsToggle={onEditsToggle}
+        editsContent={editsContent}
         agent={agentInfo}
         agentOpen={popover === 'agent' && state.online}
         onAgentToggle={onAgentToggle}
@@ -1604,7 +1733,11 @@ export function App() {
                   web.onFrameLoad()
                   setFrameLoaded(true)
                   const loadedAt = Date.now()
-                  if (cycle.current?.phase === 'fresh' || carried.current) reloadLoadedAt.current = loadedAt
+                  // A new document, without the edits of the old one: the list goes back on it
+                  // with its first snapshot, and follows it only from then on.
+                  pageGen.current++
+                  pageLoadedAt.current = loadedAt
+                  if (cycle.current?.phase === 'fresh') reloadLoadedAt.current = loadedAt
                   // The held old page goes with the first snapshot taken after this load.
                   setSwap((s) => (s && s.view.loadedAt === null ? { ...s, view: { ...s.view, loadedAt } } : s))
                   // The inspector posts its first snapshot on its own — possibly before this event,
