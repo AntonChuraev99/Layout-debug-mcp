@@ -56,6 +56,106 @@ jobs:
             test-results/
           retention-days: 7
 
+  android:
+    name: Android agent (unit tests, debug and release sample, no agent in release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      # Also validates gradle-wrapper.jar against the official checksums.
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Build and test
+        run: bash ./gradlew --no-daemon :layout-debug-agent:testDebugUnitTest :sample:assembleDebug :sample:assembleRelease :sample:verifyReleaseHasNoAgent
+      - name: Release APK has no agent classes (dex)
+        run: |
+          set -euo pipefail
+          analyzer="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          pattern='io\.github\.antonchuraev99\.layoutdebug\.agent|androidx\.compose\.ui\.tooling\.data'
+          "$analyzer" dex packages --defined-only sample/build/outputs/apk/debug/sample-debug.apk > debug-dex.txt
+          "$analyzer" dex packages --defined-only sample/build/outputs/apk/release/sample-release.apk > release-dex.txt
+          # The check must be able to see the agent: the debug APK has it.
+          if ! grep -Eq "$pattern" debug-dex.txt; then echo "the debug APK has no agent classes: the check is broken"; exit 1; fi
+          if grep -E "$pattern" release-dex.txt; then echo "the release APK carries layout-debug agent classes"; exit 1; fi
+          if "$analyzer" manifest permissions sample/build/outputs/apk/release/sample-release.apk | grep -q android.permission.INTERNET; then
+            echo "the release APK requests INTERNET, which only the agent adds"; exit 1
+          fi
+          echo "release APK: $(wc -l < release-dex.txt) dex entries, none from the agent"
+      - name: Upload reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-reports
+          path: |
+            android/*/build/reports/
+            android/*/build/test-results/
+          retention-days: 7
+
+  android-compat:
+    # The README "Compose compatibility" table: one row per Compose line, the sample's
+    # instrumentation test (tree, text, no prefetched ghosts, one live edit) on an emulator.
+    name: Android agent on Compose ${{ matrix.ui }} (emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { bom: '2026.09.00', activity: '1.13.0', ui: '1.12.1' }
+          - { bom: '2026.06.01', activity: '1.13.0', ui: '1.11.4' }
+          - { bom: '2026.03.01', activity: '1.13.0', ui: '1.10.6' }
+          - { bom: '2025.10.01', activity: '1.13.0', ui: '1.9.4' }
+          # activity-compose 1.13 would pull Compose UI up to 1.9.2: pin the one of its time.
+          - { bom: '2025.06.01', activity: '1.10.1', ui: '1.8.3' }
+          - { bom: '2024.09.00', activity: '1.9.2', ui: '1.7.0' }
+    env:
+      COMPAT_ARGS: -PcomposeBom=${{ matrix.bom }} -PactivityCompose=${{ matrix.activity }} -PexpectedComposeUi=${{ matrix.ui }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build the sample and its test APK
+        working-directory: android
+        run: bash ./gradlew --no-daemon :sample:assembleDebug :sample:assembleDebugAndroidTest $COMPAT_ARGS
+      - name: Instrumentation test on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          working-directory: android
+          script: bash ./gradlew --no-daemon :sample:connectedDebugAndroidTest $COMPAT_ARGS
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-compat-${{ matrix.ui }}
+          path: |
+            android/sample/build/reports/androidTests/
+            android/sample/build/outputs/androidTest-results/
+          retention-days: 7
+
   pack-smoke:
     name: Pack smoke (${{ matrix.os }}, Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}

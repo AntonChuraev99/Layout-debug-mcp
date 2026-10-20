@@ -1,0 +1,194 @@
+@file:OptIn(UiToolingDataApi::class)
+
+package io.github.antonchuraev99.layoutdebug.agent
+
+import android.app.Activity
+import android.view.View
+import android.view.ViewGroup
+import androidx.compose.runtime.tooling.CompositionData
+import androidx.compose.ui.layout.LayoutInfo
+import androidx.compose.ui.node.RootForTest
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.tooling.data.Group
+import androidx.compose.ui.tooling.data.NodeGroup
+import androidx.compose.ui.tooling.data.UiToolingDataApi
+import androidx.compose.ui.tooling.data.asTree
+import java.util.Collections
+import java.util.IdentityHashMap
+
+/**
+ * Turns the live composition of the resumed activity into the `/tree` answer.
+ *
+ * The slot tables come from Compose itself: with `isDebugInspectorInfoEnabled` set before
+ * the screen is composed (the agent does it at app start), every `ComposeView` keeps a set
+ * of its slot tables under the `inspection_slot_table_set` view tag and provides it as
+ * `LocalInspectionTables`, so each subcomposition (`SubcomposeLayout`: Scaffold, lazy lists,
+ * the navigation host) adds its own table there. This is what Android Studio's Layout
+ * Inspector relies on; the app's code does not change.
+ */
+internal object TreeCapture {
+
+    class Result(val json: String, val nodes: Map<String, Any>)
+
+    /** Layout node → id, kept across captures (main thread only). */
+    private val ids = StableIds()
+
+    /**
+     * Must run on the main thread: it reads live composition state. [afterIds] gets the layout
+     * node behind every id before the JSON is written (live edits are re-applied there), and
+     * returns the edits it had to drop, which go out in the same answer.
+     */
+    fun capture(
+        activity: Activity,
+        meta: (widthPx: Int, heightPx: Int) -> TreeMeta,
+        afterIds: (Map<String, Any>) -> List<OverrideError> = { emptyList() },
+    ): Result {
+        val content = activity.findViewById<View>(android.R.id.content)
+            ?: return error("the activity has no content view")
+        if (content.width <= 0 || content.height <= 0) return error("the content view is not laid out yet")
+        // ui-tooling boxes are in window coordinates; the screenshot starts at the content view.
+        val origin = IntArray(2).also(content::getLocationInWindow)
+
+        Agent.inspectionError?.let { return error(it) }
+        val tables = runCatching { slotTables(activity.window.decorView) }.getOrElse {
+            return error(ComposeVersion.failure("could not read the slot tables (view tag inspection_slot_table_set)", it))
+        }
+        if (tables.isEmpty()) {
+            return error(
+                "no Compose slot tables on this screen: either it has no Compose content, or it " +
+                    "was composed before the agent started (call LayoutDebug.install before the " +
+                    "first activity is created, or restart the activity)",
+            )
+        }
+
+        val root = TreeNode("Composition", null, -1, Box(0, 0, content.width, content.height), null)
+        root.id = "root"
+        // The root stays "Composition" whatever full-screen call it absorbs.
+        root.library = false
+        var tableFailure: Throwable? = null
+        val tableRoots = tables.mapNotNull { table ->
+            val tree = runCatching { table.asTree() }
+                .onFailure {
+                    tableFailure = it
+                    logError("could not read a slot table: ${it.javaClass.simpleName}: ${it.message}")
+                }
+                .getOrNull() ?: return@mapNotNull null
+            TreeNode("Table", null, -1, root.box, null).also {
+                build(tree, it, origin)
+                TreeShape.dropUnplaced(it) { node -> (node as? LayoutInfo)?.isPlaced != false }
+            }
+        }
+        // Every table failed: the tooling API itself does not work here, not one odd table.
+        if (tableRoots.isEmpty()) {
+            val cause = tableFailure ?: IllegalStateException("no slot table could be read")
+            return error(ComposeVersion.failure("ui-tooling-data could not read any slot table (CompositionData.asTree)", cause))
+        }
+        val nesting = runCatching {
+            TreeShape.attachSubcompositions(root, tableRoots) { node -> (node as? LayoutInfo)?.parentInfo }
+        }
+        nesting.exceptionOrNull()?.let {
+            return error(ComposeVersion.failure("nesting subcompositions under their hosts (LayoutInfo.parentInfo) failed", it))
+        }
+        // Text before collapse: a Text with its wrapper's box is absorbed by it, and hands its text over.
+        val warnings = ArrayList<String>()
+        val texts = semanticsTexts(activity.window.decorView, warnings)
+        TreeShape.attachText(root) { texts[it] }
+        TreeShape.collapse(root)
+        TreeShape.inheritLayoutNodes(root)
+        ids.prune()
+        TreeShape.assignIds(root, ids::idOf)
+        val overrideErrors = afterIds(TreeShape.layoutNodes(root))
+        val (json, nodes) = TreeShape.serialize(root, meta(content.width, content.height), TreeNotes(warnings, overrideErrors))
+        return Result(json, nodes)
+    }
+
+    private fun error(message: String) = Result(Json.error(message), emptyMap())
+
+    private var textFailureLogged = false
+
+    /**
+     * Text and content description of every layout node that has them, keyed by the node
+     * object: read from the unmerged semantics tree of each Compose root in the window
+     * (`RootForTest.semanticsOwner`, public since Compose 1.0). A failure only costs the text:
+     * the tree is still served, and the reason goes into [warnings] (the window shows it) and,
+     * once, to logcat.
+     */
+    private fun semanticsTexts(view: View, warnings: MutableList<String>): Map<Any, NodeText> {
+        val out = IdentityHashMap<Any, NodeText>()
+        runCatching { collectTexts(view, out) }.onFailure {
+            val message = ComposeVersion.failure("element text is unavailable: reading the semantics tree failed", it)
+            warnings.add(message)
+            if (!textFailureLogged) {
+                textFailureLogged = true
+                logError(message)
+            }
+        }
+        return out
+    }
+
+    private fun collectTexts(view: View, into: MutableMap<Any, NodeText>) {
+        if (view is RootForTest) visit(view.semanticsOwner.unmergedRootSemanticsNode, into)
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) collectTexts(view.getChildAt(i), into)
+        }
+    }
+
+    private fun visit(node: SemanticsNode, into: MutableMap<Any, NodeText>) {
+        val config = node.config
+        val editable = config.getOrNull(SemanticsProperties.EditableText)?.text
+        val text = NodeText.clean(editable?.let(::listOf) ?: config.getOrNull(SemanticsProperties.Text)?.map { it.text })
+        val description = NodeText.clean(config.getOrNull(SemanticsProperties.ContentDescription))
+        if (text != null || description != null) into[node.layoutInfo] = NodeText(text, description)
+        for (child in node.children) visit(child, into)
+    }
+
+    /** Every slot table set any view of this window carries, deduplicated. */
+    private fun slotTables(view: View): List<CompositionData> {
+        val found = Collections.newSetFromMap(IdentityHashMap<CompositionData, Boolean>())
+        collect(view, found)
+        return found.toList()
+    }
+
+    private fun collect(view: View, into: MutableSet<CompositionData>) {
+        val tag = view.getTag(androidx.compose.ui.R.id.inspection_slot_table_set) as? Set<*>
+        if (tag != null) {
+            // The composer adds to this set on the main thread, where we are.
+            for (item in tag.toList()) if (item is CompositionData) into.add(item)
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) collect(view.getChildAt(i), into)
+        }
+    }
+
+    /** Keeps groups that occupy space and can be named; hoists the children of the rest. */
+    private fun build(group: Group, parent: TreeNode, origin: IntArray) {
+        val target = if (keep(group)) {
+            val loc = group.location
+            val b = group.box
+            TreeNode(
+                kind = kindOf(group),
+                sourceFile = loc?.sourceFile,
+                sourceLine = loc?.lineNumber ?: -1,
+                box = Box(b.left - origin[0], b.top - origin[1], b.right - origin[0], b.bottom - origin[1]),
+                layoutNode = (group as? NodeGroup)?.node,
+            ).also {
+                it.library = loc == null || ComposePackages.isLibrary(loc.packageHash)
+                parent.add(it)
+            }
+        } else {
+            parent
+        }
+        for (child in group.children) build(child, target, origin)
+    }
+
+    private fun keep(group: Group): Boolean {
+        val box = group.box
+        if (box.right - box.left <= 0 || box.bottom - box.top <= 0) return false
+        return group is NodeGroup || group.name != null
+    }
+
+    private fun kindOf(group: Group): String =
+        group.name ?: (group as? NodeGroup)?.node?.javaClass?.simpleName ?: "Group"
+}

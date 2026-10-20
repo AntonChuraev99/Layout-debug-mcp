@@ -35,3 +35,12 @@ release-media/
 
 # Local working notes (plans, task logs): never published
 .notes/
+
+# Android agent build (android/)
+android/.gradle/
+android/.kotlin/
+android/build/
+android/*/build/
+android/local.properties
+android/captures/
+*.iml

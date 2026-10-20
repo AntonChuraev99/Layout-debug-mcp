@@ -43,6 +43,7 @@ src/mcp/                 stdio MCP server over the server's local HTTP API; star
 src/plugins/             dev-only data-source-loc plugins for the user's build: `layout-debug-mcp/vite`, `layout-debug-mcp/babel`
 src/cli.ts               the package bin: MCP server by default, `window` for the server in the foreground
 demo/                    page for trying the tool without setup
+android/                 Gradle build of the on-device agent: layout-debug-agent, layout-debug-noop, sample
 ```
 
 Architecture rules are in [CLAUDE.md](./CLAUDE.md) (it doubles as instructions for coding agents); decisions and the history of the Android spikes are in [docs/decisions/](./docs/decisions/).
@@ -66,5 +67,6 @@ Pure logic (tree collapsing, hit testing, unit conversion, config loading, secur
 - Branch from `main`, one topic per PR.
 - Commits follow [Conventional Commits](https://www.conventionalcommits.org/): `feat(android): ...`, `fix(server): ...`, `docs: ...`.
 - Before opening: `npm run typecheck && npm run typecheck:e2e && npm test && npm run build && npm run test:e2e`.
+- Touched `android/` (JDK 17+, an Android SDK in `android/local.properties`; see [android/README.md](./android/README.md)): `cd android && ./gradlew :layout-debug-agent:testDebugUnitTest :sample:assembleDebug :sample:assembleRelease :sample:verifyReleaseHasNoAgent`, and check runtime changes on a device.
 - UI changes: attach a before/after screenshot.
 - Behaviour visible to users goes into `CHANGELOG.md` under `Unreleased`.

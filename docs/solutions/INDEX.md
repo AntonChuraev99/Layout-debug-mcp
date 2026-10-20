@@ -2,6 +2,8 @@
 
 | date | category | keywords | path |
 |---|---|---|---|
+| 2026-10-20 | decision | android, semantics, text, contentDescription, isPlaced, prefetch, compatibility, ci | [Android: element text from semantics, and the Compose compatibility matrix](../decisions/android-element-text-and-compat-2026-10-20.md) |
+| 2026-10-20 | decision | android, maven-central, debugImplementation, noop, androidx-startup, LocalInspectionTables, loopback | [Android agent as a debug-only library pair](../decisions/android-agent-packaging-2026-10-20.md) |
 | 2026-10-20 | decision | android, scrcpy, webcodecs, h264, websocket, stream, overlay | [Android live video: scrcpy-server relayed to WebCodecs, tree still polled](../decisions/android-live-video-scrcpy-2026-10-20.md) |
 | 2026-10-20 | decision | x-frame-options, frame-ancestors, csp, iframe, proxy, loopback, hmr | [Web targets that forbid framing: header probe and an opt-in framing proxy](../decisions/framing-proxy-2026-10-20.md) |
 | 2026-10-20 | decision | live-edits, reload, anchor, sourceLoc, testid, export, restore | [Live edits survive a reload: an anchor-keyed list, restored by the window](../decisions/live-edits-survive-reload-2026-10-20.md) |

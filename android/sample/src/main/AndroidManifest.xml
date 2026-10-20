@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="layout-debug sample"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <!-- Optional: the agent's port (default 8790). Set it when another debug app with the agent
+             already holds 8790 on the device, and give the tool the same LD_ANDROID_PORT.
+             Here it comes from -PlayoutDebugPort=<port>. The noop artifact ignores it. -->
+        <meta-data
+            android:name="io.github.antonchuraev99.layoutdebug.PORT"
+            android:value="${layoutDebugPort}" />
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

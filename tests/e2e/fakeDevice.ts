@@ -16,21 +16,31 @@ export const VIEWPORT = { w: 1080, h: 2160 }
 
 export function deviceSnapshot(frame: number): Snapshot {
   const id = (name: string) => `f${frame}-${name}`
-  const node = (name: string, parent: string | null, kids: string[], depth: number, kind: string, bounds: LayoutNode['bounds'], path: string): LayoutNode => ({
+  const node = (
+    name: string,
+    parent: string | null,
+    kids: string[],
+    depth: number,
+    kind: string,
+    bounds: LayoutNode['bounds'],
+    path: string,
+    text?: string,
+  ): LayoutNode => ({
     id: id(name),
     parentId: parent ? id(parent) : null,
     childIds: kids.map(id),
     depth,
     kind,
-    label: name,
+    // What normalize() in src/server/android.ts makes of a node the agent reports text for.
+    label: text ? `${kind} "${text}"` : name,
     bounds,
-    anchors: { path, sourceLoc: `MainScreen.kt:${10 + depth}` },
+    anchors: { path, sourceLoc: `MainScreen.kt:${10 + depth}`, ...(text ? { text } : {}) },
     styles: {},
   })
   const nodes = [
     node('root', null, ['card', 'footer'], 0, 'Column', { x: 0, y: 0, ...VIEWPORT }, 'Column'),
     node('card', 'root', ['title'], 1, 'Card', { x: 120, y: 400, w: 840, h: 600 }, 'Column/Card[0]'),
-    node('title', 'card', [], 2, 'Text', { x: 180, y: 460, w: 500, h: 90 }, 'Column/Card[0]/Text[0]'),
+    node('title', 'card', [], 2, 'Text', { x: 180, y: 460, w: 500, h: 90 }, 'Column/Card[0]/Text[0]', 'Welcome back'),
     node('footer', 'root', [], 1, 'Button', { x: 120, y: 1800, w: 840, h: 160 }, 'Column/Button[1]'),
   ]
   return {

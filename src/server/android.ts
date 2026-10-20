@@ -64,10 +64,22 @@ export interface CapturedFrame {
   /** Null: not asked for (`withPicture: false`) when `pngError` is null too, failed otherwise. */
   png: Buffer | null
   pngError: unknown
+  /** What the agent reported alongside the tree without failing it. */
+  notes: DeviceNotes
+}
+
+/**
+ * Notes from a newer agent's `/tree`: `warnings` (the tree is served but something is
+ * missing, e.g. element text) and `overrideErrors` (live edits it could not re-apply and
+ * dropped). Device text: shown to the person, never parsed.
+ */
+export interface DeviceNotes {
+  warnings: string[]
+  overrideErrors: Array<{ id: string; reason: string }>
 }
 
 /** What the on-device agent serves at /tree. */
-interface DeviceNode {
+export interface DeviceNode {
   id: string
   parentId: string | null
   childIds: string[]
@@ -77,9 +89,12 @@ interface DeviceNode {
   bounds: { x: number; y: number; w: number; h: number }
   source: { file: string; line: number } | null
   movable: boolean
+  /** Newer agents: the node's own text and content description, from its semantics. */
+  text?: unknown
+  contentDescription?: unknown
 }
 
-interface DeviceTree {
+export interface DeviceTree {
   target: 'android'
   unit: 'dp'
   pxPerUnit: number
@@ -90,6 +105,9 @@ interface DeviceTree {
   /** Optional, newer agents: the same identity fields as `/health`. */
   package?: unknown
   pid?: unknown
+  /** Optional, newer agents: see DeviceNotes. */
+  warnings?: unknown
+  overrideErrors?: unknown
 }
 
 type IdentityResult = { ok: true; app: AndroidApp | null } | { ok: false; error: unknown }
@@ -202,12 +220,16 @@ export class AndroidAdapter {
   }
 
   async capture(budget: Budget = new Budget(CAPTURE_BUDGET_MS)): Promise<Snapshot> {
+    return (await this.captureTree(budget)).snapshot
+  }
+
+  private async captureTree(budget: Budget): Promise<{ snapshot: Snapshot; notes: DeviceNotes }> {
     const tree = await this.requestJson<DeviceTree>('/tree', budget)
     if (tree.error) throw new LocalizedError('deviceAgentError', { reason: tree.error })
     const app = await this.appIdentity(tree, budget)
     const snapshot = normalize(tree)
     if (app) snapshot.app = app
-    return snapshot
+    return { snapshot, notes: deviceNotes(tree) }
   }
 
   /**
@@ -224,15 +246,16 @@ export class AndroidAdapter {
       throw this.unresponsiveError()
     }
     const budget = new Budget(CAPTURE_BUDGET_MS)
-    const [tree, png] = await Promise.allSettled([this.capture(budget), withPicture ? this.screenshot(budget) : Promise.resolve(null)])
+    const [tree, png] = await Promise.allSettled([this.captureTree(budget), withPicture ? this.screenshot(budget) : Promise.resolve(null)])
     if (tree.status === 'rejected') throw await this.explainFailure(tree.reason, budget)
     if (this.link?.verdict.kind === 'unresponsive') {
       console.log(`[layout-debug] the adb link to ${this.device ?? 'the device'} answers again`)
       this.link = null
     }
+    const { snapshot, notes } = tree.value
     return png.status === 'fulfilled'
-      ? { snapshot: tree.value, png: png.value, pngError: null }
-      : { snapshot: tree.value, png: null, pngError: png.reason }
+      ? { snapshot, png: png.value, pngError: null, notes }
+      : { snapshot, png: null, pngError: png.reason, notes }
   }
 
   private link: { at: number; verdict: LinkVerdict } | null = null
@@ -399,7 +422,7 @@ export class AndroidAdapter {
 
   async screenshot(budget: Budget = new Budget(CAPTURE_BUDGET_MS)): Promise<Buffer> {
     const { res, body } = await this.request('/screenshot', budget)
-    if (!res.ok) throw new LocalizedError('deviceScreenshotError', { status: res.status })
+    if (!res.ok) throw screenshotError(res.status, body.toString('utf8'))
     return body
   }
 
@@ -416,15 +439,13 @@ export class AndroidAdapter {
     if (body.error) throw new Error(body.error)
   }
 
+  /**
+   * Same rule as every JSON route: a non-2xx status (deviceAgentHttp, from requestJson) or an
+   * `error` field in a 2xx body (the agent could not reach its main thread, say) is a failure.
+   */
   async clearOverrides(): Promise<void> {
-    const { res, body } = await this.request('/overrides/clear', new Budget(CAPTURE_BUDGET_MS))
-    if (!res.ok) {
-      throw new LocalizedError('deviceAgentHttp', {
-        path: '/overrides/clear',
-        status: res.status,
-        reason: agentReason(body.toString('utf8')),
-      })
-    }
+    const body = await this.requestJson<{ ok?: boolean; error?: string }>('/overrides/clear', new Budget(CAPTURE_BUDGET_MS))
+    if (body.error) throw new Error(body.error)
   }
 
   private model: string | null = null
@@ -512,6 +533,18 @@ export function agentReason(body: string): string {
 }
 
 /**
+ * A non-2xx `/screenshot` answer as the window's error: with the agent's own reason when its
+ * body names one (`{"error":"screenshots need Android 8.0 …"}`), else just the status. Pure;
+ * exported for tests.
+ */
+export function screenshotError(status: number, body: string): LocalizedError {
+  const reason = agentReason(body)
+  return reason
+    ? new LocalizedError('deviceScreenshotAgentError', { status, reason })
+    : new LocalizedError('deviceScreenshotError', { status })
+}
+
+/**
  * Does this capture failure need the adb link probe to be told apart from a silent
  * agent? Yes for what looks like "nothing answers" — a timed-out or refused request
  * through the forward, or an adb call on the capture path killed by its timeout. No
@@ -533,7 +566,7 @@ export function classifyCaptureError(err: unknown): ErrorCode {
   if (err instanceof LocalizedError) {
     if (err.key === 'deviceAgentError') return 'device_no_bridge'
     if (err.key === 'deviceWrongApp' || err.key === 'deviceAppNotRunning') return 'device_wrong_app'
-    if (err.key === 'deviceScreenshotError') return 'screenshot'
+    if (err.key === 'deviceScreenshotError' || err.key === 'deviceScreenshotAgentError') return 'screenshot'
     if (err.key === 'deviceUnresponsive') return 'device_unresponsive'
     // The agent answered, just not with a usable tree: its own words are the cause, not the bridge setup.
     if (err.key === 'deviceAgentHttp' || err.key === 'deviceAgentBadReply') return 'device'
@@ -555,23 +588,27 @@ export function classifyCaptureError(err: unknown): ErrorCode {
 
 /**
  * Device tree → the same Snapshot shape the web adapter produces, so the UI, the MCP
- * server and the agent prompt stay identical across targets.
+ * server and the agent prompt stay identical across targets. Pure; exported for tests.
  */
-function normalize(tree: DeviceTree): Snapshot {
+export function normalize(tree: DeviceTree): Snapshot {
   const nodes: Record<NodeId, LayoutNode> = {}
 
   for (const [id, n] of Object.entries(tree.nodes)) {
     const dp = (px: number) => `${Math.round((px / tree.pxPerUnit) * 10) / 10}dp`
+    const { text, contentDescription } = deviceNodeText(n)
     nodes[id] = {
       id,
       parentId: n.parentId,
       childIds: n.childIds,
       depth: n.depth,
       kind: n.kind,
-      label: n.kind,
+      label: deviceNodeLabel(n.kind, text ?? contentDescription),
       bounds: n.bounds,
       anchors: {
         sourceLoc: n.source ? `${n.source.file}:${n.source.line}` : undefined,
+        // Like the web inspector's own text: what the agent searches the code for.
+        text,
+        description: contentDescription,
         path: pathOf(tree, id),
       },
       styles: {
@@ -597,6 +634,74 @@ function normalize(tree: DeviceTree): Snapshot {
     rootId: tree.rootId,
     nodes,
   }
+}
+
+/** Longest device text kept in a snapshot: the same cap the web inspector puts on its text. */
+export const DEVICE_TEXT_MAX = 60
+/** Longest text shown inside a label, as on the web (`button "Save…"`). */
+const LABEL_TEXT_MAX = 24
+
+function cleanDeviceText(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const s = value.replace(/\s+/g, ' ').trim()
+  if (!s) return undefined
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
+/**
+ * A device node's `text` and `contentDescription`: strings only (anything else from the
+ * device is dropped), whitespace collapsed, capped at DEVICE_TEXT_MAX. They are page data:
+ * MCP output quotes and marks them like web text. Pure; exported for tests.
+ */
+export function deviceNodeText(n: { text?: unknown; contentDescription?: unknown }): {
+  text?: string
+  contentDescription?: string
+} {
+  return {
+    text: cleanDeviceText(n.text, DEVICE_TEXT_MAX),
+    contentDescription: cleanDeviceText(n.contentDescription, DEVICE_TEXT_MAX),
+  }
+}
+
+/** Longest device note quoted to the window, and how many of each kind are kept per capture. */
+const NOTE_MAX = 400
+const NOTES_PER_KIND = 5
+
+/**
+ * `warnings` and `overrideErrors` of a `/tree` answer: strings only, whitespace collapsed,
+ * capped, at most NOTES_PER_KIND of each; anything malformed is dropped. Pure; exported for tests.
+ */
+export function deviceNotes(tree: { warnings?: unknown; overrideErrors?: unknown }): DeviceNotes {
+  const warnings = (Array.isArray(tree.warnings) ? tree.warnings : [])
+    .map((w) => cleanDeviceText(w, NOTE_MAX))
+    .filter((w): w is string => w !== undefined)
+    .slice(0, NOTES_PER_KIND)
+  const overrideErrors = (Array.isArray(tree.overrideErrors) ? tree.overrideErrors : [])
+    .map((e) => {
+      const o = (e && typeof e === 'object' ? e : {}) as { id?: unknown; error?: unknown }
+      const id = cleanDeviceText(o.id, 80)
+      const reason = cleanDeviceText(o.error, NOTE_MAX)
+      return id && reason ? { id, reason } : null
+    })
+    .filter((e): e is { id: string; reason: string } => e !== null)
+    .slice(0, NOTES_PER_KIND)
+  return { warnings, overrideErrors }
+}
+
+/**
+ * The warnings not shown yet this session, remembered in `seen`: an agent repeats a
+ * warning on every capture while the cause lasts, the window should show it once. Pure.
+ */
+export function newWarnings(seen: Set<string>, warnings: string[]): string[] {
+  const fresh = warnings.filter((w) => !seen.has(w))
+  for (const w of fresh) seen.add(w)
+  return fresh
+}
+
+/** `Text "Row 1"` when the node shows text, else just the composable name. Pure; exported for tests. */
+export function deviceNodeLabel(kind: string, shown: string | undefined): string {
+  if (!shown) return kind
+  return `${kind} "${shown.length > LABEL_TEXT_MAX ? `${shown.slice(0, LABEL_TEXT_MAX)}…` : shown}"`
 }
 
 /** `Scaffold > Column > Row > Text` — the readable trail an agent can search by. */

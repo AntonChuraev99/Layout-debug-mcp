@@ -27,4 +27,4 @@
 
 ## Note
 
-Most of the remaining frame time is the on-device PNG encode. The on-device agent is not in this repo yet (issue #8).
+Most of the remaining frame time is the on-device PNG encode. The on-device agent is in `android/layout-debug-agent`.

@@ -63,6 +63,7 @@ function anchorLines(anchors: LayoutNode['anchors'] | undefined): string[] {
   if (a.domId) lines.push(`id: ${quote(a.domId, CAPS.domId)}`)
   if (a.className) lines.push(`classes: ${quote(a.className, CAPS.className)}`)
   if (a.text) lines.push(`text: ${quote(a.text, CAPS.text)}`)
+  if (a.description) lines.push(`description: ${quote(a.description, CAPS.text)}`)
   lines.push(`path: ${quote(a.path, CAPS.path)}`)
   return lines
 }
@@ -108,7 +109,7 @@ export function compactTree(snapshot: Snapshot, maxDepth: number): string {
       `${'  '.repeat(depth)}${quote(node.id, CAPS.nodeId)} ${quote(node.kind, CAPS.kind)}` +
         `${anchor ? ` [${JSON.stringify(anchor)}]` : ''} ` +
         `${q(node.bounds?.w)}×${q(node.bounds?.h)}${snapshot.unit === 'dp' ? 'dp' : ''}` +
-        (a.text ? ` ${quote(a.text, CAPS.text)}` : ''),
+        (a.text ? ` ${quote(a.text, CAPS.text)}` : a.description ? ` ${quote(a.description, CAPS.text)}` : ''),
     )
     for (const child of Array.isArray(node.childIds) ? node.childIds : []) walk(child, depth + 1)
   }

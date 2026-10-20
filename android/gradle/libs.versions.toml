@@ -1,0 +1,37 @@
+[versions]
+agp = "9.4.1"
+kotlin = "2.4.21"
+# The agent is compiled against this Compose line and declares it as its minimum. Gradle picks the
+# highest version on the classpath, so an app on a newer Compose keeps its own: adding the agent to
+# a debug build never upgrades the app's Compose (debug and release stay on the same versions).
+composeBomFloor = "2024.09.00"
+startup = "1.2.0"
+# Sample app only: the newest stable line, to prove the agent works against it at runtime.
+composeBom = "2026.09.00"
+activityCompose = "1.13.0"
+junit = "4.13.2"
+androidxTest = "1.7.0"
+androidxTestExtJunit = "1.3.0"
+mavenPublish = "0.37.0"
+
+[libraries]
+compose-bom-floor = { module = "androidx.compose:compose-bom", version.ref = "composeBomFloor" }
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-tooling-data = { module = "androidx.compose.ui:ui-tooling-data" }
+compose-foundation-layout = { module = "androidx.compose.foundation:foundation-layout" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+startup-runtime = { module = "androidx.startup:startup-runtime", version.ref = "startup" }
+junit = { module = "junit:junit", version.ref = "junit" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTest" }
+androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTest" }
+androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+# AGP 9 compiles Kotlin itself; this only pins the Kotlin Gradle plugin version it uses.
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "mavenPublish" }

@@ -18,9 +18,12 @@ const en = {
     '(MCP server: npx -y layout-debug-mcp); it picks the edit up from here.',
   deviceError: 'Device: {reason}',
   overrideError: 'Live edit: {reason}',
+  overrideDropped: 'Live edit of {id} was undone on the device: {reason}',
+  deviceWarning: 'The agent on the device reports: {reason}',
   clearOverridesError: 'Resetting edits: {reason}',
   deviceAgentError: 'agent on the device: {reason}',
   deviceScreenshotError: 'screenshot: HTTP {status}',
+  deviceScreenshotAgentError: 'screenshot: the agent on the device answered HTTP {status}{reason}',
   deviceUnresponsive:
     'adb lists {serial}, but the device does not answer over adb (adb shell timed out). The app is not at fault, ' +
     'so restarting it will not help: the adb connection has stalled. Reconnect it: turn Wireless debugging off and ' +
@@ -56,9 +59,12 @@ const ru: Record<MessageKey, string> = {
     '(MCP-сервер: npx -y layout-debug-mcp); он заберёт правку отсюда.',
   deviceError: 'Устройство: {reason}',
   overrideError: 'Живая правка: {reason}',
+  overrideDropped: 'Живая правка {id} отменена на устройстве: {reason}',
+  deviceWarning: 'Агент на устройстве сообщает: {reason}',
   clearOverridesError: 'Сброс правок: {reason}',
   deviceAgentError: 'агент на устройстве: {reason}',
   deviceScreenshotError: 'скриншот: HTTP {status}',
+  deviceScreenshotAgentError: 'скриншот: агент на устройстве ответил HTTP {status}{reason}',
   deviceUnresponsive:
     'adb видит {serial}, но устройство не отвечает по adb (adb shell не ответил вовремя). Приложение ни при чём, ' +
     'его перезапуск не поможет: зависло само adb-соединение. Переподключи его: выключи и включи «Отладку по Wi-Fi» ' +
