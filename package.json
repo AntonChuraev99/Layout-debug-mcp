@@ -29,6 +29,18 @@
   "bin": {
     "layout-debug-mcp": "dist/cli.js"
   },
+  "exports": {
+    "./vite": {
+      "types": "./dist/plugins/vite.d.ts",
+      "default": "./dist/plugins/vite.js"
+    },
+    "./babel": {
+      "types": "./dist/plugins/babel.d.ts",
+      "import": "./dist/plugins/babel.js",
+      "require": "./dist/plugins/babel.cjs"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     "demo",
@@ -57,7 +69,16 @@
     "ws": "^8.18.3",
     "zod": "^4.1.12"
   },
+  "peerDependencies": {
+    "@babel/core": "^7.20.0 || ^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@babel/core": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@babel/core": "^7.29.7",
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.0",
