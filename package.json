@@ -1,6 +1,6 @@
 {
   "name": "layout-debug-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Select a layout layer on a live UI, move it for real, and hand the result to an AI agent over MCP.",
   "keywords": [
