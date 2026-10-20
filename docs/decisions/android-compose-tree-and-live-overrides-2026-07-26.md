@@ -7,7 +7,7 @@ keywords: [compose, ui-tooling, asTree, LayoutNode, modifier, reflection, adb-fo
 
 # Android: Compose tree from ui-tooling, live overrides by modifier swap
 
-The on-device agent is not in this repo yet (#8), so its names are not searchable here.
+The on-device agent now lives in `android/layout-debug-agent`; how it is packaged: [android-agent-packaging-2026-10-20.md](android-agent-packaging-2026-10-20.md).
 
 ## Context
 

@@ -45,6 +45,7 @@ The core is a **normalized snapshot**: both adapters return the same format, so 
 - `src/inspector/` — the script injected into the web target: DOM snapshot, live edits via inline styles, ghost copy.
 - `src/mcp/` — stdio MCP server: `layout_snapshot`, `selected_element`, `pending_requests`, `reply_in_window`.
 - `src/shared/` — protocol types, ports.
+- `android/` — its own Gradle build: `layout-debug-agent` (the on-device agent, `debugImplementation`), `layout-debug-noop` (same API, release), `sample` app. JDK 17+ (Android Studio's JBR works), `android/local.properties` points to the SDK.
 - `demo/` — a bundled demo page; `tests/e2e/` — Playwright suite driving the window and a real MCP client.
 
 ### One agent entry: MCP, for any agent
@@ -66,7 +67,7 @@ Why it is built this way:
 - adb is called directly via `child_process`, not through a wrapper like adbkit, so adb errors reach the user as they are.
 - On "apply", the window sends raw facts (delta in dp, boxes before and after, parent and siblings, the node's overrides); whether a move becomes padding, offset or a spacer is the agent's call.
 
-Key decisions: [server trust boundary](docs/decisions/local-server-hardening-2026-09-21.md), [Android tree and live overrides](docs/decisions/android-compose-tree-and-live-overrides-2026-07-26.md), [anonymous telemetry](docs/decisions/anonymous-telemetry-2026-10-08.md).
+Key decisions: [server trust boundary](docs/decisions/local-server-hardening-2026-09-21.md), [Android tree and live overrides](docs/decisions/android-compose-tree-and-live-overrides-2026-07-26.md), [Android agent packaging](docs/decisions/android-agent-packaging-2026-10-20.md), [anonymous telemetry](docs/decisions/anonymous-telemetry-2026-10-08.md).
 
 ## Commands
 

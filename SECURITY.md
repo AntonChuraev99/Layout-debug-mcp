@@ -20,11 +20,12 @@ layout-debug-mcp is a local development tool. It runs a server on your machine, 
 | Page content poses as instructions to your agent (prompt injection) | Text from the inspected page reaches the agent in a block marked as untrusted page data, quoted and length-capped |
 | A foreign site embeds your dev page and talks to the inspector | The inspector accepts messages only from its parent window when that window is the tool's origin, and posts only to that origin; the window accepts messages only from its own iframe at the target's origin and posts only to it |
 | Oversized or malformed input crashes the server | Request bodies are capped at 256 KB and the connection is dropped past it; snapshots are validated node by node; static paths reject `..`, drive letters and Windows device names |
-| Tool code in production | Web inspector is dev-only; Android agent is debug-only |
+| Tool code in production | Web inspector is dev-only; the Android agent is a `debugImplementation` library that does not start in a non-debuggable build, and release builds get the empty `layout-debug-noop` (CI checks the sample's release APK for agent classes) |
+| The Android agent is reached from the network or from a web page on the device | It listens on the device's `127.0.0.1` only (reached through `adb forward`); requests carrying `Origin`, a cross-site `Sec-Fetch-Site`, or a non-loopback `Host` are refused with `403`; no CORS headers |
 
 Known gaps, tracked for 1.0:
 
 - Marking page data reduces prompt injection but can't rule it out: what your agent does with it is up to the agent and the permissions your MCP client gives it.
-- The Android on-device agent still lives in a spike app; the published library will listen on loopback / a local abstract socket only.
+- While a debug build with the Android agent runs, other apps on the same device can connect to its loopback port: Android does not isolate loopback per app. Install debug builds only on devices you trust.
 
 What the tool does **not** protect against: anything with access to your user account on the machine, and the agent you connect — it receives screenshots and layout data by design.

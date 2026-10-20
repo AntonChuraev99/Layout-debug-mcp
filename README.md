@@ -319,9 +319,23 @@ For source mapping add a build step that writes `data-source-loc="file:line"` on
 
 ## Android
 
-The on-device agent is a small debug-only component: it walks the real Compose tree via `ui-tooling` (`asTree()` gives boxes and compiler source info), serves it with a `PixelCopy` screenshot over HTTP, and applies live overrides by swapping the `LayoutNode` modifier on the running composition. The tool reaches it through `adb forward`, which it sets up and re-establishes by itself. Each capture asks for the tree and the screenshot at the same time and keeps that screenshot with the tree, so they match; several open windows share one capture.
+The on-device agent is a small debug-only library: it walks the real Compose tree via `ui-tooling` (`asTree()` gives boxes and compiler source info), serves it with a `PixelCopy` screenshot over HTTP, and applies live overrides by swapping the `LayoutNode` modifier on the running composition. The tool reaches it through `adb forward`, which it sets up and re-establishes by itself. Each capture asks for the tree and the screenshot at the same time and keeps that screenshot with the tree, so they match; several open windows share one capture.
 
-> **Status:** the agent works in a spike app and is **not yet packaged as a library**. Publishing it to Maven Central as a one-line `debugImplementation` is the next Android milestone. Until then Android mode is for early testers.
+Add it to your app module, one line per build type:
+
+```kotlin
+dependencies {
+    debugImplementation("io.github.antonchuraev99:layout-debug-agent:0.1.0")
+    releaseImplementation("io.github.antonchuraev99:layout-debug-noop:0.1.0")
+}
+```
+
+That's the whole setup. The agent starts with the app process (androidx.startup), before the first screen is composed, and turns on Compose's inspection tables, so `Scaffold` slots, lazy-list items and other `SubcomposeLayout` content are in the tree without wrapping your content. It listens on `127.0.0.1:8790` only: reachable through `adb forward`, not from the network, and it refuses requests from web pages in the device's browser. It does not start in a build that is not debuggable. The release build gets `layout-debug-noop`: the same `LayoutDebug` API with empty bodies and no dependencies, so no tool code and no `INTERNET` permission from the tool reach release.
+
+- **Turned off androidx.startup** (`tools:node="remove"` on `InitializationProvider`)? Call `LayoutDebug.install(this)` in `Application.onCreate`; with the noop artifact the line compiles in release and does nothing.
+- **Another debug app with the agent already holds 8790** on the device? Move yours with `<meta-data android:name="io.github.antonchuraev99.layoutdebug.PORT" android:value="8791" />` in the app's manifest and set the same `LD_ANDROID_PORT`. The agent's logcat tag is `layout-debug`: it logs the port it got or why it could not bind.
+- **Requirements:** Jetpack Compose 1.7+ (Compose Multiplatform 1.7+ on Android uses the same libraries), minSdk 21, screenshots on Android 8.0+. The agent never upgrades your Compose: it declares 1.7 as its minimum and your app's version wins.
+- **Before the first release reaches Maven Central**, build the artifacts from this repo: `cd android && ./gradlew publishToMavenLocal`, and add `mavenLocal()` to your repositories. `android/sample` is a plain Compose app with the agent wired in.
 
 Switch the tool to Android mode with `{ "target": "android" }` in `layout-debug.config.json` in your project, or with `env` in the MCP client config:
 
@@ -329,11 +343,11 @@ Switch the tool to Android mode with `{ "target": "android" }` in `layout-debug.
 { "command": "npx", "args": ["-y", "layout-debug-mcp"], "env": { "LD_TARGET": "android", "LD_DEVICE": "emulator-5554" } }
 ```
 
-`LD_DEVICE` is needed only when more than one device is attached. The app must be running in a debug build.
+`LD_DEVICE` is needed only when more than one device is attached. The app must be running in a debug build with the agent.
 
 Several debug apps with the agent on one device? Set `LD_ANDROID_PACKAGE` (or `"androidPackage"` in the config file) to the application id you are debugging, e.g. `com.example.app`. The tool then checks who answers on the agent port and shows an error naming both apps when it is another one, instead of showing that app's screen.
 
-The tool reads two optional fields from the agent's `GET /health`, next to `ok` and `port`: `package` (the application id) and `pid` (the app process id), e.g. `{"ok":true,"port":8790,"package":"com.example.app","pid":12345}`. `/tree` may carry the same two fields. With them, the window and the MCP tools say which app the data comes from. An agent without them still works: with `LD_ANDROID_PACKAGE` set the tool falls back to `adb shell pidof <package>`, which only confirms the app is running, and says so.
+The agent reports who it is in `GET /health`, next to `ok` and `port`: `package` (the application id), `pid` (the app process id) and its `version`, e.g. `{"ok":true,"port":8790,"package":"com.example.app","pid":12345,"version":"0.1.0"}`; `/tree` carries `package` and `pid` too. With them, the window and the MCP tools say which app the data comes from. An agent without them (an older or custom one) still works: with `LD_ANDROID_PACKAGE` set the tool falls back to `adb shell pidof <package>`, which only confirms the app is running, and says so.
 
 In Android mode the window shows the device frame instead of an iframe, with the same overlay, selection, drag and reset. The frame refreshes on its own (paused while you drag, backing off when captures fail), and the header chip shows the device model. The first snapshot of a session resets the device's live overrides, so stale ones from a previous window don't linger.
 
@@ -397,7 +411,7 @@ Good tools sit nearby; here is where this one differs.
 - The tool has no agent of its own and never edits your code. Your agent does, with the permissions your MCP client gives it.
 - Page text (class names, text, anchors) reaches the agent marked as untrusted page data and length-capped.
 - Nothing leaves your machine except what goes to the agent you connect, and anonymous usage counts ([Telemetry](#telemetry)) unless you turn them off.
-- The web inspector is added only in dev. The Android agent lives in the debug source set; the spike app still keeps a small inert bridge in the main source set, which the library will split into `-agent` / `-noop` artifacts.
+- The web inspector is added only in dev. The Android agent is a `debugImplementation` library that listens on the device's loopback only and does not start in a non-debuggable build; release builds get the empty `layout-debug-noop` (CI checks the sample's release APK for agent classes).
 
 Found a vulnerability? See [SECURITY.md](./SECURITY.md).
 
@@ -424,7 +438,7 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 - Live edits are a **preview**, not code: they vanish on page reload or app rebuild until the agent writes them into the source.
 - The agent has to be listening. Some agents stop the loop on their own after a while; if the header says **No agent listening**, ask again. A request the agent took stays "Agent editing" until it replies with its `requestId`, or you press "Stop waiting".
 - **Web:** the page is shown in an `iframe`, so a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs your own `data-source-loc` build step (no plugin shipped yet). In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
-- **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
+- **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20 and Jetpack Compose 1.12 (BOM 2026.09.00) on Android 17. Boxes line up with the activity's content view; content in a dialog or popup window is in the tree but not at its place on the frame. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
 
 ## Troubleshooting
 
@@ -437,7 +451,7 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 | Windows: `spawn npx ENOENT` | Use `"command": "cmd", "args": ["/c", "npx", "-y", "layout-debug-mcp"]` |
 | Window says the inspector didn't respond | The script tag is in the page, the target allows framing (`X-Frame-Options`, CSP `frame-ancestors`), CSP `script-src` allows `127.0.0.1:5175` |
 | Android: "adb not found" / "No device connected" | `adb devices` lists exactly one device with status `device` (or set `LD_DEVICE`); the window picks it up without a reload |
-| Android: "The device is there, but the app is silent" | The app runs as a debug build with the agent, listening on `LD_ANDROID_PORT` (8790) |
+| Android: "The device is there, but the app is silent" | The app runs as a debug build with the agent, listening on `LD_ANDROID_PORT` (8790): `adb logcat -s layout-debug` shows `listening on 127.0.0.1:8790`, or why it could not bind |
 | Android: "the agent on port … belongs to …, not to …" | Another debug app holds the agent port. Close it and start yours, or fix `LD_ANDROID_PACKAGE` |
 | Android: "adb lists …, but the device does not answer over adb" | The adb link has stalled (common with wireless debugging); restarting the app won't help. Turn Wireless debugging off and on, or `adb disconnect <serial>` then `adb connect <ip:port>`, or replug USB. The window picks the device up by itself |
 
@@ -445,10 +459,9 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 
 Pre-1.0. Next up:
 
-1. Android agent as a published library (Maven Central, `debugImplementation`, `-agent` / `-noop` split).
-2. A Claude Code plugin.
-3. Clean-machine install checks with Cursor, VS Code, Codex CLI and other clients.
-4. Live video stream from the device over scrcpy (H.264 decoded in the browser with WebCodecs) instead of refreshed snapshots.
+1. A Claude Code plugin.
+2. Clean-machine install checks with Cursor, VS Code, Codex CLI and other clients.
+3. Live video stream from the device over scrcpy (H.264 decoded in the browser with WebCodecs) instead of refreshed snapshots.
 
 Later, driven by demand: before/after snapshot diff, a source-location plugin for Vite/Babel, Compose Desktop, Android Views, Flutter.
 

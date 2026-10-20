@@ -5,3 +5,7 @@
 *.ts text eol=lf
 *.png binary
 *.jpg binary
+# Android build (android/): the Gradle wrapper scripts and jar.
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
