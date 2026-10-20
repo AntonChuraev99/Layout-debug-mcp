@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { parsePort, SERVER_PORT, UI_PORT } from '../shared/ports.ts'
 import type { TargetKind } from '../shared/protocol.ts'
 import { isAndroidPackage } from './androidApp.ts'
+import { isScrcpyVersion } from './scrcpy.ts'
 import { isLoopbackHostname } from './security.ts'
 
 export interface Config {
@@ -25,6 +26,13 @@ export interface Config {
    * checks nothing (the agent on the port is taken as is).
    */
   androidPackage: string | null
+  /**
+   * Android live video: the scrcpy-server file to push. Null: the one a scrcpy install
+   * on PATH ships (src/server/scrcpyStream.ts).
+   */
+  scrcpyServer: string | null
+  /** The version string scrcpy-server must be started with; null: ask `scrcpy --version`. */
+  scrcpyVersion: string | null
   /** The config file that was read, or null when there is none. */
   configFile: string | null
   /** Exit after this long with no window and no waiting agent; 0 keeps running. */
@@ -62,6 +70,8 @@ interface FileConfig {
   androidPort?: unknown
   device?: unknown
   androidPackage?: unknown
+  scrcpyServer?: unknown
+  scrcpyVersion?: unknown
   framingProxy?: unknown
   framingProxyPort?: unknown
 }
@@ -113,6 +123,16 @@ export function loadConfig(cwd: string = process.cwd(), env: Env = process.env):
     )
   }
 
+  const envServer = value(env.LD_SCRCPY_SERVER)
+  const fileServer = optionalString(file.data.scrcpyServer, from('scrcpyServer'))
+  const scrcpyServer = envServer ? resolve(cwd, envServer) : fileServer ? resolve(dirname(path), fileServer) : null
+
+  const envVersion = value(env.LD_SCRCPY_VERSION)
+  const scrcpyVersion = envVersion ?? optionalString(file.data.scrcpyVersion, from('scrcpyVersion')) ?? null
+  if (scrcpyVersion !== null && !isScrcpyVersion(scrcpyVersion)) {
+    const source = envVersion ? 'LD_SCRCPY_VERSION' : from('scrcpyVersion')
+    throw new ConfigError(`${source} is ${JSON.stringify(scrcpyVersion)}; expected a scrcpy version like "4.1"`)
+  }
   const targetUrl =
     value(env.LD_TARGET_URL) ?? optionalString(file.data.targetUrl, from('targetUrl')) ?? `http://127.0.0.1:${SERVER_PORT}/demo/`
 
@@ -123,6 +143,8 @@ export function loadConfig(cwd: string = process.cwd(), env: Env = process.env):
     androidPort,
     device: value(env.LD_DEVICE) ?? optionalString(file.data.device, from('device')) ?? null,
     androidPackage,
+    scrcpyServer,
+    scrcpyVersion,
     configFile: file.found ? path : null,
     idleExitMs: parseIdleMinutes(env.LD_IDLE_EXIT_MINUTES) * 60_000,
     framingProxyPort: framingProxyPort(env, file.data, from, target, targetUrl),

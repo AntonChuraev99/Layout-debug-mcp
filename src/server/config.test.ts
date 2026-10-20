@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { SERVER_PORT } from '../shared/ports.ts'
 import { CONFIG_FILE_NAME, ConfigError, DEFAULT_FRAMING_PROXY_PORT, loadConfig, parseIdleMinutes } from './config.ts'
@@ -117,6 +117,21 @@ describe('loadConfig: invalid values fail at start with the source named', () =>
     fails(() => loadConfig(dir('pkg-bad-env'), { LD_ANDROID_PACKAGE: 'com.x;reboot' }), /LD_ANDROID_PACKAGE is "com\.x;reboot"; expected an Android application id/)
     fails(() => loadConfig(dir('pkg-bad-file', { androidPackage: 'app' }), {}), /"androidPackage" in .* is "app"; expected an Android application id/)
     fails(() => loadConfig(dir('pkg-type', { androidPackage: 7 }), {}), /"androidPackage" in .* is 7; expected a string/)
+  })
+
+  test('scrcpy: unset is null; the env wins; paths resolve against cwd / the config file; a bad version fails', () => {
+    const none = loadConfig(dir('scrcpy-none'), {})
+    assert.equal(none.scrcpyServer, null)
+    assert.equal(none.scrcpyVersion, null)
+    const fileDir = dir('scrcpy-file', { scrcpyServer: 'tools/scrcpy-server', scrcpyVersion: '4.1' })
+    const fromFile = loadConfig(fileDir, {})
+    assert.equal(fromFile.scrcpyServer, resolve(fileDir, 'tools/scrcpy-server'))
+    assert.equal(fromFile.scrcpyVersion, '4.1')
+    const fromEnv = loadConfig(fileDir, { LD_SCRCPY_SERVER: 'other/server', LD_SCRCPY_VERSION: '3.3.4' })
+    assert.equal(fromEnv.scrcpyServer, resolve(fileDir, 'other/server'))
+    assert.equal(fromEnv.scrcpyVersion, '3.3.4')
+    fails(() => loadConfig(dir('scrcpy-bad-env'), { LD_SCRCPY_VERSION: '4.1; reboot' }), /LD_SCRCPY_VERSION is "4\.1; reboot"; expected a scrcpy version/)
+    fails(() => loadConfig(dir('scrcpy-bad-file', { scrcpyVersion: 'v 4' }), {}), /"scrcpyVersion" in .* is "v 4"; expected a scrcpy version/)
   })
 
   test('LD_IDLE_EXIT_MINUTES', () => {

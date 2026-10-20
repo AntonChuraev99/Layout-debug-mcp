@@ -3,6 +3,7 @@ import type { AndroidApp } from '../shared/protocol.ts'
 import { LOCALE_NAMES, LOCALES, useT, type Translate } from './i18n.ts'
 import { Popover } from './Popover.tsx'
 import { BrandGlyph, IconGlobe, IconInbox, IconMove, IconSmartphone } from './icons.tsx'
+import type { StreamPhase } from './useAndroidStream.ts'
 
 export interface StatusInfo {
   tone: 'danger' | 'warn' | 'busy'
@@ -37,6 +38,8 @@ interface Props {
   onOpenUrl: () => void
   /** `app`: the Android app the on-device agent belongs to, when the server knows it. */
   device: { name: string; serial: string | null; app?: Pick<AndroidApp, 'package' | 'source'> | null } | null
+  /** Android: the live video switch; null hides it (web). */
+  video: { on: boolean; phase: StreamPhase; onToggle: () => void } | null
   inbox: { open: number; working: boolean; unread: boolean }
   inboxOpen: boolean
   onInboxToggle: (open: boolean) => void
@@ -124,6 +127,18 @@ export const Header = memo(function Header(p: Props) {
             <span>{t('device.none')}</span>
           )}
         </div>
+      )}
+      {p.video && (
+        <button
+          type="button"
+          className={`video-btn${p.video.on ? ` video-btn--${p.video.phase}` : ''}`}
+          aria-pressed={p.video.on}
+          title={t('video.toggleTitle')}
+          onClick={p.video.onToggle}
+        >
+          <span className="video-btn__dot" aria-hidden="true" />
+          {t('video.toggle')}
+        </button>
       )}
 
       <span className="tb__spacer" />

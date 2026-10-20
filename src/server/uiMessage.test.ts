@@ -101,6 +101,8 @@ describe('parseUiMessage: accepts every valid frame', () => {
     { t: 'clearRequests' },
     { t: 'clearChat' },
     { t: 'androidCapture' },
+    { t: 'androidCapture', picture: false },
+    { t: 'androidCapture', picture: true },
     { t: 'androidOverride', override },
     { t: 'androidClearOverrides' },
   ]
@@ -109,4 +111,10 @@ describe('parseUiMessage: accepts every valid frame', () => {
       assert.deepEqual(parseUiMessage(JSON.stringify(msg)), { ok: true, msg })
     })
   }
+})
+
+test('parseUiMessage: androidCapture with a picture flag that is not a boolean is refused', () => {
+  const r = parseUiMessage(JSON.stringify({ t: 'androidCapture', picture: 'no' }))
+  assert.equal(r.ok, false)
+  assert.match(!r.ok ? r.reason : '', /picture is not a boolean/)
 })

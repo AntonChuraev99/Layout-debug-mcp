@@ -372,6 +372,15 @@ The tool reads two optional fields from the agent's `GET /health`, next to `ok` 
 
 In Android mode the window shows the device frame instead of an iframe, with the same overlay, selection, drag and reset. The frame refreshes on its own (paused while you drag, backing off when captures fail), and the header chip shows the device model. The first snapshot of a session resets the device's live overrides, so stale ones from a previous window don't linger.
 
+### Live video
+
+**Live video** in the header shows the device screen as a video stream instead of refreshed snapshots, so animations, scrolling and your drag are visible as they happen. The tool starts [scrcpy](https://github.com/Genymobile/scrcpy)'s `scrcpy-server` on the device over adb (video only, no control, no audio), relays its H.264 stream to the window over a local WebSocket, and the window decodes it with WebCodecs. Layer boxes still come from the agent's tree, refreshed as before; while the video shows, the tree capture skips the screenshot.
+
+- **Setup:** install scrcpy 4.x ([install guide](https://github.com/Genymobile/scrcpy#get-the-app)) so `scrcpy` is on `PATH`; the tool uses the `scrcpy-server` that ships with it and asks `scrcpy --version` for the version the server has to be started with. Nothing is bundled with this package. Elsewhere: set `LD_SCRCPY_SERVER` to the `scrcpy-server` file (and `LD_SCRCPY_VERSION` if no `scrcpy` executable sits next to it). scrcpy's own `SCRCPY_SERVER_PATH` is not read, so one left over from another install can't shadow the scrcpy on `PATH`.
+- **Browser:** Chrome, Edge or another Chromium browser (WebCodecs). Elsewhere the switch stays on snapshots and says why.
+- **Fallback:** no scrcpy, a version mismatch, a device that drops the stream or a decoder error turns the video off with the cause in the status pill, and the window goes back to snapshots.
+- Turning the switch off, closing or reloading the window stops `scrcpy-server` on the device and removes its `adb forward`. The choice is remembered per browser.
+
 ## Configuration
 
 Environment variables (set them in the MCP client's `env`) override `layout-debug.config.json` in the folder the tool starts in (`LD_CONFIG` points to another file), which overrides defaults.
@@ -386,6 +395,8 @@ Environment variables (set them in the MCP client's `env`) override `layout-debu
 | `LD_DEVICE` | `device` | none | `adb -s` serial (android) |
 | `LD_ANDROID_PORT` | `androidPort` | `8790` | On-device agent port (android) |
 | `LD_ANDROID_PACKAGE` | `androidPackage` | none | Application id the on-device agent must belong to, e.g. `com.example.app` (android) |
+| `LD_SCRCPY_SERVER` | `scrcpyServer` | the one next to `scrcpy` on `PATH` | `scrcpy-server` file for [live video](#live-video) (android) |
+| `LD_SCRCPY_VERSION` | `scrcpyVersion` | from `scrcpy --version` | scrcpy version that file belongs to, e.g. `4.1`; must match exactly (android) |
 | `LD_SERVER_PORT` | none | `5175` | Port of the server and the window |
 | `LD_SERVER_URL` | none | `http://127.0.0.1:5175` | Where the MCP process finds the server (overrides `LD_SERVER_PORT` there) |
 | `LD_WAIT_SECONDS` | none | `40` | How long `wait_for_message` waits before "no message yet" (5–50) |
@@ -463,7 +474,7 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 - Android: the same list is put back when the window starts and when the app restarts (a new pid from the on-device agent); not verified on a real device yet. When the agent does not report its pid, an app restart is not detected: reload the window to put the edits back.
 - The agent has to be listening. Some agents stop the loop on their own after a while; if the header says **No agent listening**, ask again. A request the agent took stays "Agent editing" until it replies with its `requestId`, or you press "Stop waiting".
 - **Web:** the page is shown in an `iframe`; a target that sends `X-Frame-Options` / `frame-ancestors` needs the [framing proxy](#pages-that-forbid-framing), one target per server start. Through it the page runs on the proxy's origin, so OAuth redirect URIs and absolute URLs the page builds from its own config still point at the original address. Its cookies are renamed with a `ldp<port>_` prefix (page code reading them by name sees the prefixed name), only those reach the target, and non-HttpOnly ones are readable by other pages on `127.0.0.1`, which browsers don't separate by port. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs `data-source-loc` on the page: the bundled plugin covers React / JSX with Vite or Babel; other stacks (Vue, Svelte, SWC-only builds) need their own build step. In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
-- **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
+- **Android:** without [live video](#live-video) (scrcpy and a Chromium browser) the frame is a refreshed snapshot. Live video assumes the app fills the screen: in split screen or a pop-up window the video and the boxes don't line up, and the window says so. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees; verified on Compose Multiplatform 1.11 / Kotlin 2.3.20. Element text isn't in the artifacts yet: `asTree()` doesn't expose it without parsing parameters, and the `file:line` anchor is more precise anyway.
 
 ## Troubleshooting
 
@@ -479,6 +490,7 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 | Android: "adb not found" / "No device connected" | `adb devices` lists exactly one device with status `device` (or set `LD_DEVICE`); the window picks it up without a reload |
 | Android: "The device is there, but the app is silent" | The app runs as a debug build with the agent, listening on `LD_ANDROID_PORT` (8790) |
 | Android: "the agent on port … belongs to …, not to …" | Another debug app holds the agent port. Close it and start yours, or fix `LD_ANDROID_PACKAGE` |
+| Android: **Live video off** | The pill says why. "scrcpy was not found": install scrcpy or set `LD_SCRCPY_SERVER`, then restart the server. "does not match the client": `LD_SCRCPY_VERSION` differs from the `scrcpy-server` file. "Several devices are connected": set `LD_DEVICE`. adb's own words (offline, unauthorized) are shown as it said them |
 | Android: "adb lists …, but the device does not answer over adb" | The adb link has stalled (common with wireless debugging); restarting the app won't help. Turn Wireless debugging off and on, or `adb disconnect <serial>` then `adb connect <ip:port>`, or replug USB. The window picks the device up by itself |
 
 ## Roadmap
@@ -488,7 +500,6 @@ Pre-1.0. Next up:
 1. Android agent as a published library (Maven Central, `debugImplementation`, `-agent` / `-noop` split).
 2. A Claude Code plugin.
 3. Clean-machine install checks with Cursor, VS Code, Codex CLI and other clients.
-4. Live video stream from the device over scrcpy (H.264 decoded in the browser with WebCodecs) instead of refreshed snapshots.
 
 Later, driven by demand: before/after snapshot diff, Compose Desktop, Android Views, Flutter.
 

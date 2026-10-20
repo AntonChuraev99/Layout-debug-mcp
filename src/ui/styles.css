@@ -539,6 +539,55 @@ kbd {
   color: var(--fg-3);
 }
 
+/* Live video switch (Android). Same pill as the agent indicator: off is a hollow dot, live a
+   green one, starting a dim one, stopped a warn one (the status pill says why). */
+.video-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  margin-left: 8px;
+  padding: 0 10px;
+  border-radius: 13px;
+  border: 1px solid var(--line-strong);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--fg-2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.video-btn:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+.video-btn:focus-visible {
+  outline: 2px solid var(--ink-fg);
+  outline-offset: 2px;
+}
+.video-btn__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--fg-3);
+  flex-shrink: 0;
+}
+.video-btn[aria-pressed='true'] {
+  color: var(--fg);
+}
+.video-btn--connecting .video-btn__dot {
+  background: var(--fg-3);
+  box-shadow: none;
+}
+.video-btn--live .video-btn__dot {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(76, 195, 138, 0.18);
+}
+.video-btn--failed .video-btn__dot {
+  background: var(--warn);
+  box-shadow: none;
+}
+
 .inbox-btn {
   position: relative;
 }
@@ -714,6 +763,10 @@ kbd {
   white-space: pre-wrap;
   max-height: 240px;
   overflow: auto;
+}
+.pop__actions {
+  display: flex;
+  gap: 8px;
 }
 .pop__note {
   font-size: 12px;
@@ -1215,6 +1268,10 @@ kbd {
   border-radius: var(--r-xl);
   box-shadow: 0 0 0 1px var(--line-strong), 0 20px 48px rgba(0, 0, 0, 0.5);
   user-select: none;
+}
+/* The live video canvas exists (and is drawn into) before its first frame; the snapshot shows until then. */
+.device[hidden] {
+  display: none;
 }
 
 .blank {

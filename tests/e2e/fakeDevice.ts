@@ -1,5 +1,6 @@
 import type { Page, WebSocketRoute } from '@playwright/test'
 import type { LayoutNode, ServerToUi, Snapshot, UiToServer } from '../../src/shared/protocol.ts'
+import type { StreamToUi } from '../../src/shared/stream.ts'
 import { expect, palette } from './helpers'
 
 /**
@@ -47,10 +48,30 @@ export function deviceSnapshot(frame: number): Snapshot {
 
 export interface FakeDevice {
   frames: () => number
+  /** The `picture` flag of every `androidCapture` so far (undefined: not sent). */
+  pictureFlags: () => Array<boolean | undefined>
+  /** How many live video sockets the window opened. */
+  streams: () => number
+}
+
+/**
+ * The live video socket (`/ws/stream`) of a machine without scrcpy: the server says so and
+ * closes, as src/server/index.ts openStream does. Never the real server: it is in web mode.
+ */
+function noScrcpy(ws: WebSocketRoute) {
+  const msg: StreamToUi = { t: 'error', code: 'scrcpy_not_found', detail: 'no scrcpy on PATH, and LD_SCRCPY_SERVER is not set' }
+  ws.send(JSON.stringify(msg))
+  void ws.close({ code: 1000 })
 }
 
 export async function openAndroidWindow(page: Page): Promise<FakeDevice> {
   let frame = 0
+  let streams = 0
+  const pictureFlags: Array<boolean | undefined> = []
+  await page.routeWebSocket(/\/ws\/stream$/, (ws: WebSocketRoute) => {
+    streams++
+    noScrcpy(ws)
+  })
   await page.addInitScript(() => {
     try {
       localStorage.setItem('layout-debug.coachSeen', '1')
@@ -75,6 +96,7 @@ export async function openAndroidWindow(page: Page): Promise<FakeDevice> {
     ws.onMessage((raw) => {
       const msg = JSON.parse(String(raw)) as UiToServer
       if (msg.t !== 'androidCapture') return
+      pictureFlags.push(msg.picture)
       frame++
       const n = frame
       setTimeout(() => out({ t: 'androidSnapshot', snapshot: deviceSnapshot(n), frame: n }), 30)
@@ -83,7 +105,7 @@ export async function openAndroidWindow(page: Page): Promise<FakeDevice> {
   await page.goto('/')
   await expect(page.getByRole('main', { name: 'Device frame. Click to select a layer' })).toBeVisible()
   await expect(page.locator('img.device')).toBeVisible()
-  return { frames: () => frame }
+  return { frames: () => frame, pictureFlags: () => [...pictureFlags], streams: () => streams }
 }
 
 /** The card node's box on screen (the overlay draws every layer as a box with its label). */
