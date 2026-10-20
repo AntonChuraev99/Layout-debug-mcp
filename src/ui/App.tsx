@@ -5,7 +5,7 @@ import { AgentPopoverBody } from './AgentConnect.tsx'
 import { serverOrigin } from './origins.ts'
 import { Blank, CopyBlock } from './Blank.tsx'
 import { ChatPopover, type LocalMessage } from './ChatPopover.tsx'
-import { frameCropRect, placeHeldPopover, union, type Side } from './geometry.ts'
+import { frameCropRect, placeHeldPopover, streamPlacement, union, type Side } from './geometry.ts'
 import { CaptureButton } from './CaptureButton.tsx'
 import { elementKey, findIndexed, indexByPath, resolveSelected, type SelectionAnchor } from './selection.ts'
 import { useStableCallback } from './useStable.ts'
@@ -45,6 +45,7 @@ import {
 } from './thread.ts'
 import { TelemetryNotice } from './TelemetryNotice.tsx'
 import { useAndroidAutoRefresh } from './useAndroidAutoRefresh.ts'
+import { useAndroidStream, type StreamFailure } from './useAndroidStream.ts'
 import { useDeviceFrame } from './useDeviceFrame.ts'
 import { RECONNECT_MS, useServer } from './useServer.ts'
 import { useTarget } from './useTarget.ts'
@@ -54,7 +55,7 @@ const ANDROID_OVERRIDE_INTERVAL_MS = 150
 /** How long "no ghost on the old place" stays in the status pill (Android). */
 const GHOST_NOTE_MS = 6000
 /** Why a moved element on Android got no ghost (i18n `ghost.<reason>`). */
-type GhostFailure = 'noFrame' | 'frameChanged' | 'noCanvas' | 'offFrame'
+type GhostFailure = 'noFrame' | 'frameChanged' | 'noCanvas' | 'offFrame' | 'videoMisaligned'
 /** After the page fired `load`, this long without a hello means no inspector script in it. */
 const INSPECTOR_TIMEOUT_MS = 2500
 /** A blip shorter than this (first connect, server restart) is not worth a red pill. */
@@ -69,6 +70,34 @@ const DISMISSED_KEY = 'layout-debug.dismissed'
 const ALT_PICKS_KEY = 'layout-debug.altPicks'
 /** The first-run hint was seen once in this browser. */
 const COACH_SEEN_KEY = 'layout-debug.coachSeen'
+/** Android live video switched on in this browser ('1'). */
+const VIDEO_KEY = 'layout-debug.androidVideo'
+/** A video that keeps another shape than the tree for this long gets a note (a rotation settles sooner). */
+const VIDEO_MISMATCH_NOTE_MS = 1500
+
+/** What the status popover says for each way the live video can stop. */
+const VIDEO_FAILURE_TEXT: Record<StreamFailure['code'], MsgKey> = {
+  unsupported: 'video.unsupported',
+  not_android: 'video.notAndroid',
+  device_no_adb: 'android.noAdbText',
+  device_not_found: 'video.deviceNotFound',
+  device_ambiguous: 'video.deviceAmbiguous',
+  scrcpy_not_found: 'video.notFound',
+  scrcpy_version_unknown: 'video.versionUnknown',
+  scrcpy_failed: 'video.failed',
+  stream_protocol: 'video.protocol',
+  decoder: 'video.decoder',
+  closed: 'video.closed',
+}
+
+/** Off unless switched on here before; blocked storage keeps it off. */
+function readVideoPref(): boolean {
+  try {
+    return localStorage.getItem(VIDEO_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 function readNumber(key: string): number {
   try {
@@ -312,6 +341,8 @@ export function App() {
   // Android: the device picture is the only copy of how a moved element looked before the
   // move, and the next frame already shows it moved — so the ghost is cut out at the first step.
   const deviceImgRef = useRef<HTMLImageElement | null>(null)
+  /** The live video's canvas (useAndroidStream draws into it); shown instead of the <img> once frames come. */
+  const streamCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const [originGhosts, setOriginGhosts] = useState<Record<NodeId, OriginGhost>>({})
   const dropOriginGhost = useCallback((nodeId: NodeId) => {
     setOriginGhosts((g) => {
@@ -340,25 +371,34 @@ export function App() {
       const snap = live.current.androidSnapshot
       const node = snap?.nodes[nodeId]
       const img = deviceImgRef.current
-      // No <img> at all: the first device picture has not arrived (or failed).
-      if (!snap || !node || !img) return ghostFailed('noFrame')
+      if (!snap || !node) return ghostFailed('noFrame')
       // Its place as shown now: own size edits count, the move does not exist yet.
       const base = effectiveRect(node, prev && { ...prev, dx: 0, dy: 0 })
       const carried = inheritedShifts(snap.nodes, live.current.androidOverrides).get(nodeId)
       const shown = { ...base, x: base.x + (carried?.x ?? 0), y: base.y + (carried?.y ?? 0) }
-      const src = img.currentSrc || img.src
-
-      const cut = () => {
-        const crop = frameCropRect(shown, { w: img.naturalWidth, h: img.naturalHeight }, snap.viewport)
+      const cutFrom = (picture: CanvasImageSource, natural: { w: number; h: number }) => {
+        const crop = frameCropRect(shown, natural, snap.viewport)
         if (!crop) return ghostFailed('offFrame')
         const canvas = document.createElement('canvas')
         canvas.width = Math.max(1, Math.round(crop.w))
         canvas.height = Math.max(1, Math.round(crop.h))
         const ctx = canvas.getContext('2d')
         if (!ctx) return ghostFailed('noCanvas')
-        ctx.drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height)
+        ctx.drawImage(picture, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height)
         setOriginGhosts((g) => ({ ...g, [nodeId]: { src: canvas.toDataURL('image/png'), base } }))
       }
+
+      // Live video: its current frame is drawn before this move reached the device.
+      const video = live.current.videoLive ? streamCanvasRef.current : null
+      if (video && video.width > 0) {
+        // A video that does not cover the viewport exactly would put the copy in the wrong place.
+        if (streamPlacement({ w: video.width, h: video.height }, snap.viewport)?.fit !== 'aligned') return ghostFailed('videoMisaligned')
+        return cutFrom(video, { w: video.width, h: video.height })
+      }
+      // No <img> at all: the first device picture has not arrived (or failed).
+      if (!img) return ghostFailed('noFrame')
+      const src = img.currentSrc || img.src
+      const cut = () => cutFrom(img, { w: img.naturalWidth, h: img.naturalHeight })
 
       if (img.complete && img.naturalWidth > 0) return cut()
       // The picture is still being decoded: the auto refresh (every ~0.8 s) or an earlier
@@ -419,8 +459,19 @@ export function App() {
     },
   )
 
-  const deviceFrame = useDeviceFrame(state.androidFrame, isAndroid && Boolean(state.androidSnapshot))
-  const androidCapture = useCallback(() => send({ t: 'androidCapture' }), [send])
+  // Live video (scrcpy + WebCodecs) behind the header switch. The tree keeps coming from the
+  // capture loop below; only the picture moves to the video, and back to snapshots on any failure.
+  const [videoOn, setVideoOn] = useState(() => readVideoPref())
+  const toggleVideo = useCallback(() => {
+    setVideoOn((on) => {
+      writeStorage(VIDEO_KEY, on ? '0' : '1')
+      return !on
+    })
+  }, [])
+  const stream = useAndroidStream(isAndroid && videoOn && state.online, streamCanvasRef)
+  const videoLive = stream.phase === 'live'
+  const deviceFrame = useDeviceFrame(state.androidFrame, isAndroid && Boolean(state.androidSnapshot) && !videoLive)
+  const androidCapture = useCallback(() => send({ t: 'androidCapture', picture: !videoLive }), [send, videoLive])
   const refresh = useAndroidAutoRefresh({
     enabled: isAndroid && state.online,
     paused: dragging,
@@ -430,8 +481,8 @@ export function App() {
   })
 
   // Timers outlive the render that set them; they read the window's current state here.
-  const live = useRef({ isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send })
-  live.current = { isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send }
+  const live = useRef({ isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send, videoLive })
+  live.current = { isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send, videoLive }
 
   // The web adapter owns its snapshot, so the server needs a copy for MCP consumers.
   // A 4000-node tree on every mutation would flood the socket — at most one send per
@@ -916,6 +967,24 @@ export function App() {
     }
   }, [isAndroid, snapshot, canvasBox])
 
+  // The live video over the same rect as the snapshot <img>: stretched onto the viewport when
+  // it has the viewport's shape (the boxes are in display pixels), whole and centred otherwise.
+  const videoPlacement = useMemo(
+    () => (videoLive && stream.size && snapshot ? streamPlacement(stream.size, snapshot.viewport) : null),
+    [videoLive, stream.size, snapshot],
+  )
+  const videoFit = videoPlacement?.fit ?? 'aligned'
+  /** A shape mismatch that outlived a rotation's settling time: said in the status pill. */
+  const [videoMisfit, setVideoMisfit] = useState<'rotated' | 'mismatch' | null>(null)
+  useEffect(() => {
+    if (videoFit === 'aligned') {
+      setVideoMisfit(null)
+      return
+    }
+    const timer = window.setTimeout(() => setVideoMisfit(videoFit), VIDEO_MISMATCH_NOTE_MS)
+    return () => window.clearTimeout(timer)
+  }, [videoFit])
+
   // --- floating card placement (palette or chat) ---
   // A layer scrolled out of the frame keeps its selection, but the palette has nothing to point at.
   const shifts = useMemo(() => (snapshot ? inheritedShifts(snapshot.nodes, overrides) : null), [snapshot, overrides])
@@ -1258,7 +1327,72 @@ export function App() {
         </div>
       ),
     }
-  } else if (isAndroid && snapshot && deviceFrame.error) {
+  } else if (isAndroid && videoOn && stream.phase === 'failed' && stream.failure) {
+    const failure = stream.failure
+    status = {
+      tone: 'warn',
+      text: t('status.videoFailed'),
+      popover: (
+        <div className="pop__body">
+          <h2 className="pop__title">{t('video.failedTitle')}</h2>
+          <p className="pop__text pop__text--wrap">{t(VIDEO_FAILURE_TEXT[failure.code])}</p>
+          {failure.code !== 'unsupported' && <p className="pop__note pop__text--wrap mono">{failure.detail || t('video.noDetails')}</p>}
+          <div className="pop__actions">
+            {failure.code !== 'unsupported' && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  stream.retry()
+                  setPopover(null)
+                }}
+              >
+                {t('video.retry')}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                toggleVideo()
+                setPopover(null)
+              }}
+            >
+              {t('video.turnOff')}
+            </button>
+          </div>
+        </div>
+      ),
+    }
+  } else if (isAndroid && videoLive && videoMisfit && stream.size && snapshot) {
+    status = {
+      tone: 'warn',
+      text: t('status.videoMisaligned'),
+      popover: (
+        <div className="pop__body">
+          <h2 className="pop__title">{t('video.misalignedTitle')}</h2>
+          <p className="pop__text pop__text--wrap">
+            {videoMisfit === 'rotated'
+              ? t('video.rotated')
+              : t('video.mismatch', {
+                  video: `${stream.size.w}×${stream.size.h}`,
+                  viewport: `${snapshot.viewport.w}×${snapshot.viewport.h}`,
+                })}
+          </p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              toggleVideo()
+              setPopover(null)
+            }}
+          >
+            {t('video.turnOff')}
+          </button>
+        </div>
+      ),
+    }
+  } else if (isAndroid && snapshot && deviceFrame.error && !videoLive) {
     status = {
       tone: 'warn',
       text: t('status.frameError'),
@@ -1293,6 +1427,10 @@ export function App() {
         </div>
       ),
     }
+  } else if (isAndroid && videoOn && stream.phase === 'connecting' && state.online) {
+    // Pushing and starting scrcpy-server takes a second or two; the snapshot shows meanwhile.
+    const text = t('status.videoStarting')
+    status = { tone: 'busy', text, title: stream.version ? `${text} (scrcpy ${stream.version})` : text }
   } else if (state.error && state.errorSeq > hiddenErrorSeq) {
     status = {
       tone: 'danger',
@@ -1422,6 +1560,11 @@ export function App() {
     [deviceShown, deviceName, state.device, appPackage, appSource],
   )
 
+  const videoSwitch = useMemo(
+    () => (isAndroid ? { on: videoOn, phase: stream.phase, onToggle: toggleVideo } : null),
+    [isAndroid, videoOn, stream.phase, toggleVideo],
+  )
+
   // --- stable props for the memoized children ---
   const pickInfo = useMemo(
     () => ({ alt: picking, blocked: toolsBlocked, compact: learned && !isAndroid, mac: IS_MAC }),
@@ -1479,6 +1622,7 @@ export function App() {
         onUrlDraft={setUrlDraft}
         onOpenUrl={onOpenUrl}
         device={deviceChip}
+        video={videoSwitch}
         inbox={inboxInfo}
         inboxOpen={popover === 'inbox'}
         onInboxToggle={onInboxToggle}
@@ -1505,24 +1649,42 @@ export function App() {
       >
         {isAndroid ? (
           snapshot ? (
-            // No picture yet (first frame in flight or failed): the overlay still works on the
-            // tree, and a failed frame is explained by the status pill.
-            deviceFrame.src && (
-              <img
-                ref={deviceImgRef}
-                className="device"
-                src={deviceFrame.src}
-                alt={t('canvas.deviceAlt')}
-                draggable={false}
-                onError={deviceFrame.onDecodeError}
-                style={{
-                  left: device.x,
-                  top: device.y,
-                  width: snapshot.viewport.w * device.scale,
-                  height: snapshot.viewport.h * device.scale,
-                }}
-              />
-            )
+            <>
+              {/* No picture yet (first frame in flight or failed): the overlay still works on the
+                  tree, and a failed frame is explained by the status pill. */}
+              {deviceFrame.src && !videoLive && (
+                <img
+                  ref={deviceImgRef}
+                  className="device"
+                  src={deviceFrame.src}
+                  alt={t('canvas.deviceAlt')}
+                  draggable={false}
+                  onError={deviceFrame.onDecodeError}
+                  style={{
+                    left: device.x,
+                    top: device.y,
+                    width: snapshot.viewport.w * device.scale,
+                    height: snapshot.viewport.h * device.scale,
+                  }}
+                />
+              )}
+              {/* Mounted while the video is on, so frames can be drawn before it is shown. */}
+              {videoOn && (
+                <canvas
+                  ref={streamCanvasRef}
+                  className="device device--video"
+                  role="img"
+                  aria-label={t('canvas.deviceAlt')}
+                  hidden={!videoLive}
+                  style={{
+                    left: device.x + (videoPlacement?.rect.x ?? 0) * device.scale,
+                    top: device.y + (videoPlacement?.rect.y ?? 0) * device.scale,
+                    width: (videoPlacement?.rect.w ?? snapshot.viewport.w) * device.scale,
+                    height: (videoPlacement?.rect.h ?? snapshot.viewport.h) * device.scale,
+                  }}
+                />
+              )}
+            </>
           ) : androidState === 'device-error' ? (
             <Blank icon={<IconSmartphone size={18} />} title={t('deviceError.title')}>
               <p className="blank__text">{t('deviceError.text')}</p>

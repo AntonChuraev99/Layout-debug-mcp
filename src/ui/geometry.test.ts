@@ -1,6 +1,35 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { placeHeldPopover, placePopover } from './geometry.ts'
+import { placeHeldPopover, placePopover, streamPlacement } from './geometry.ts'
+
+describe('streamPlacement: the live video over the tree', () => {
+  const viewport = { w: 1080, h: 2424 }
+
+  test('a downscaled video of the same screen (scrcpy 854×1920 for 1080×2424) covers the viewport exactly', () => {
+    assert.deepEqual(streamPlacement({ w: 854, h: 1920 }, viewport), { rect: { x: 0, y: 0, w: 1080, h: 2424 }, fit: 'aligned' })
+    assert.equal(streamPlacement({ w: 1080, h: 2424 }, viewport)?.fit, 'aligned')
+  })
+
+  test('the device turned: the video is drawn whole and centred, and said to be rotated', () => {
+    const p = streamPlacement({ w: 1920, h: 854 }, viewport)!
+    assert.equal(p.fit, 'rotated')
+    assert.equal(p.rect.w, 1080)
+    assert.ok(Math.abs(p.rect.h - (1080 * 854) / 1920) < 1e-9)
+    assert.ok(Math.abs(p.rect.y - (2424 - p.rect.h) / 2) < 1e-9)
+    assert.equal(p.rect.x, 0)
+  })
+
+  test('another shape (app in split screen): centred, a mismatch', () => {
+    const p = streamPlacement({ w: 1080, h: 1080 }, viewport)!
+    assert.equal(p.fit, 'mismatch')
+    assert.deepEqual(p.rect, { x: 0, y: (2424 - 1080) / 2, w: 1080, h: 1080 })
+  })
+
+  test('empty sizes: nothing to place', () => {
+    assert.equal(streamPlacement({ w: 0, h: 1920 }, viewport), null)
+    assert.equal(streamPlacement({ w: 854, h: 1920 }, { w: 0, h: 0 }), null)
+  })
+})
 
 // The release recording: 1280×720 window, a 520 px card low in the frame. Neither side has
 // room for the 360 px chat, below is too short, so it opens above — and used to jump to the

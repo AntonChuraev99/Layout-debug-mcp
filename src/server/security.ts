@@ -1,6 +1,7 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import { join, relative, resolve, sep, isAbsolute } from 'node:path'
 import { SERVER_PORT, UI_PORT, WINDOW_ORIGINS } from '../shared/ports.ts'
+import { STREAM_PATH } from '../shared/stream.ts'
 
 /**
  * Pure checks behind the server's trust boundary. Kept free of I/O on the
@@ -55,6 +56,25 @@ export function checkOrigin(headers: Headers): Verdict {
 export function checkWsUpgrade(headers: Headers): Verdict {
   const host = checkHost(headers)
   return host.ok ? checkOrigin(headers) : host
+}
+
+/**
+ * WebSocket `/ws/stream`: the device's screen as live video. The same trust as `/ws`
+ * (the phone's screen is as private as the queue): loopback Host, the window's Origin.
+ */
+export function checkStreamUpgrade(headers: Headers): Verdict {
+  return checkWsUpgrade(headers)
+}
+
+/**
+ * Which socket a WebSocket handshake asks for: the window's `/ws`, the live video
+ * `/ws/stream`, or neither (refused). The query string does not count.
+ */
+export function wsRouteOf(url: string | undefined): 'window' | 'stream' | null {
+  const path = (url ?? '').split('?')[0]
+  if (path === '/ws') return 'window'
+  if (path === STREAM_PATH) return 'stream'
+  return null
 }
 
 /**

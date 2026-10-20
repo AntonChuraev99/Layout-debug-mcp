@@ -339,7 +339,11 @@ export type UiToServer =
   /** The user closed the one-time telemetry notice; the server remembers it in the telemetry state file. */
   | { t: 'telemetryNoticeDismissed' }
   // --- android target: the device is reachable only through the server ---
-  | { t: 'androidCapture' }
+  /**
+   * `picture: false`: this window shows the live video (src/shared/stream.ts) and needs only
+   * the tree; the server then skips the device screenshot while every window says so.
+   */
+  | { t: 'androidCapture'; picture?: boolean }
   | { t: 'androidOverride'; override: Override }
   | { t: 'androidClearOverrides' }
 

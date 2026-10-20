@@ -124,10 +124,13 @@ export function parseUiMessage(raw: string): ParsedUiMessage {
       const p = overrideProblem(data.override)
       return p ? bad(p) : { ok: true, msg: data as UiToServer }
     }
+    case 'androidCapture':
+      return data.picture == null || typeof data.picture === 'boolean'
+        ? { ok: true, msg: data as UiToServer }
+        : bad('picture is not a boolean')
     case 'clearRequests':
     case 'clearChat':
     case 'telemetryNoticeDismissed':
-    case 'androidCapture':
     case 'androidClearOverrides':
       return { ok: true, msg: data as UiToServer }
     default:

@@ -7,8 +7,10 @@ import {
   checkApiRequest,
   checkShutdownRequest,
   checkStaticRequest,
+  checkStreamUpgrade,
   checkWsUpgrade,
   resolveStaticPath,
+  wsRouteOf,
   type Verdict,
 } from './security.ts'
 
@@ -17,6 +19,26 @@ const denied = (v: Verdict, pattern?: RegExp) => {
   assert.equal(v.ok, false, 'expected a denial')
   if (pattern && !v.ok) assert.match(v.reason, pattern)
 }
+
+describe('the live video socket', () => {
+  test('routes /ws to the window socket and /ws/stream to the video; anything else nowhere', () => {
+    assert.equal(wsRouteOf('/ws'), 'window')
+    assert.equal(wsRouteOf('/ws?x=1'), 'window')
+    assert.equal(wsRouteOf('/ws/stream'), 'stream')
+    assert.equal(wsRouteOf('/ws/stream/'), null)
+    assert.equal(wsRouteOf('/wss'), null)
+    assert.equal(wsRouteOf('/api/chat'), null)
+    assert.equal(wsRouteOf(undefined), null)
+  })
+
+  test('the same Host and Origin checks as /ws: the phone screen is as private as the queue', () => {
+    const host = `127.0.0.1:${SERVER_PORT}`
+    ok(checkStreamUpgrade({ host, origin: `http://127.0.0.1:${UI_PORT}` }))
+    ok(checkStreamUpgrade({ host }))
+    denied(checkStreamUpgrade({ host, origin: 'https://evil.example' }), /not the layout-debug window/)
+    denied(checkStreamUpgrade({ host: 'evil.example', origin: `http://127.0.0.1:${UI_PORT}` }), /DNS rebinding/)
+  })
+})
 
 const serverHost = `127.0.0.1:${SERVER_PORT}`
 const uiOrigin = `http://localhost:${UI_PORT}`

@@ -1,6 +1,48 @@
 import { chatDialog, expect, palette, selectedBox, test } from './helpers'
 import { clickCard, openAndroidWindow } from './fakeDevice'
 
+test('android: live video switch with no scrcpy falls back to snapshots and says why', async ({ page }) => {
+  const device = await openAndroidWindow(page)
+  const toggle = page.getByRole('button', { name: 'Live video', exact: true })
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+
+  const pill = page.getByRole('button', { name: 'Live video off', exact: true })
+  await expect(pill).toBeVisible()
+  expect(device.streams()).toBe(1)
+  await pill.click()
+  const pop = page.getByRole('dialog', { name: 'Live video off' })
+  await expect(pop).toContainText('scrcpy was not found')
+  await expect(pop).toContainText('LD_SCRCPY_SERVER is not set')
+  await page.screenshot({ path: `${process.env.LD_E2E_SHOTS_DIR ?? test.info().outputPath('shots')}/android-video-fallback.png` })
+
+  // Still the snapshot loop: frames keep landing, each asking for the picture too.
+  await expect(page.locator('img.device')).toBeVisible()
+  const from = device.frames()
+  await expect.poll(device.frames, { timeout: 10_000 }).toBeGreaterThanOrEqual(from + 2)
+  expect(device.pictureFlags().every((p) => p !== false)).toBe(true)
+
+  await pop.getByRole('button', { name: 'Turn live video off' }).click()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  await expect(pill).toBeHidden()
+})
+
+test('android: live video outside a browser with WebCodecs stays on snapshots and says so', async ({ page }) => {
+  await page.addInitScript(() => {
+    // A browser without WebCodecs, as the window sees it.
+    delete (window as { VideoDecoder?: unknown }).VideoDecoder
+  })
+  const device = await openAndroidWindow(page)
+  await page.getByRole('button', { name: 'Live video', exact: true }).click()
+  const pill = page.getByRole('button', { name: 'Live video off', exact: true })
+  await pill.click()
+  await expect(page.getByRole('dialog', { name: 'Live video off' })).toContainText('no WebCodecs video decoder')
+  // Nothing was asked of the server, and the frame is the snapshot.
+  expect(device.streams()).toBe(0)
+  await expect(page.locator('img.device')).toBeVisible()
+})
+
 test('android: the open chat survives a drag of its element (text, same card)', async ({ page }) => {
   const device = await openAndroidWindow(page)
   await clickCard(page)
