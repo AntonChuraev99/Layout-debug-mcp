@@ -64,6 +64,18 @@ export interface CapturedFrame {
   /** Null: not asked for (`withPicture: false`) when `pngError` is null too, failed otherwise. */
   png: Buffer | null
   pngError: unknown
+  /** What the agent reported alongside the tree without failing it. */
+  notes: DeviceNotes
+}
+
+/**
+ * Notes from a newer agent's `/tree`: `warnings` (the tree is served but something is
+ * missing, e.g. element text) and `overrideErrors` (live edits it could not re-apply and
+ * dropped). Device text: shown to the person, never parsed.
+ */
+export interface DeviceNotes {
+  warnings: string[]
+  overrideErrors: Array<{ id: string; reason: string }>
 }
 
 /** What the on-device agent serves at /tree. */
@@ -93,6 +105,9 @@ export interface DeviceTree {
   /** Optional, newer agents: the same identity fields as `/health`. */
   package?: unknown
   pid?: unknown
+  /** Optional, newer agents: see DeviceNotes. */
+  warnings?: unknown
+  overrideErrors?: unknown
 }
 
 type IdentityResult = { ok: true; app: AndroidApp | null } | { ok: false; error: unknown }
@@ -205,12 +220,16 @@ export class AndroidAdapter {
   }
 
   async capture(budget: Budget = new Budget(CAPTURE_BUDGET_MS)): Promise<Snapshot> {
+    return (await this.captureTree(budget)).snapshot
+  }
+
+  private async captureTree(budget: Budget): Promise<{ snapshot: Snapshot; notes: DeviceNotes }> {
     const tree = await this.requestJson<DeviceTree>('/tree', budget)
     if (tree.error) throw new LocalizedError('deviceAgentError', { reason: tree.error })
     const app = await this.appIdentity(tree, budget)
     const snapshot = normalize(tree)
     if (app) snapshot.app = app
-    return snapshot
+    return { snapshot, notes: deviceNotes(tree) }
   }
 
   /**
@@ -227,15 +246,16 @@ export class AndroidAdapter {
       throw this.unresponsiveError()
     }
     const budget = new Budget(CAPTURE_BUDGET_MS)
-    const [tree, png] = await Promise.allSettled([this.capture(budget), withPicture ? this.screenshot(budget) : Promise.resolve(null)])
+    const [tree, png] = await Promise.allSettled([this.captureTree(budget), withPicture ? this.screenshot(budget) : Promise.resolve(null)])
     if (tree.status === 'rejected') throw await this.explainFailure(tree.reason, budget)
     if (this.link?.verdict.kind === 'unresponsive') {
       console.log(`[layout-debug] the adb link to ${this.device ?? 'the device'} answers again`)
       this.link = null
     }
+    const { snapshot, notes } = tree.value
     return png.status === 'fulfilled'
-      ? { snapshot: tree.value, png: png.value, pngError: null }
-      : { snapshot: tree.value, png: null, pngError: png.reason }
+      ? { snapshot, png: png.value, pngError: null, notes }
+      : { snapshot, png: null, pngError: png.reason, notes }
   }
 
   private link: { at: number; verdict: LinkVerdict } | null = null
@@ -576,19 +596,19 @@ export function normalize(tree: DeviceTree): Snapshot {
   for (const [id, n] of Object.entries(tree.nodes)) {
     const dp = (px: number) => `${Math.round((px / tree.pxPerUnit) * 10) / 10}dp`
     const { text, contentDescription } = deviceNodeText(n)
-    const shown = text ?? contentDescription
     nodes[id] = {
       id,
       parentId: n.parentId,
       childIds: n.childIds,
       depth: n.depth,
       kind: n.kind,
-      label: deviceNodeLabel(n.kind, shown),
+      label: deviceNodeLabel(n.kind, text ?? contentDescription),
       bounds: n.bounds,
       anchors: {
         sourceLoc: n.source ? `${n.source.file}:${n.source.line}` : undefined,
         // Like the web inspector's own text: what the agent searches the code for.
-        text: shown,
+        text,
+        description: contentDescription,
         path: pathOf(tree, id),
       },
       styles: {
@@ -600,7 +620,6 @@ export function normalize(tree: DeviceTree): Snapshot {
         // Compose tweaks land on the node that owns the modifier chain; a node without
         // one can be selected and described but not dragged.
         movable: n.movable ? 'yes' : 'no',
-        ...(contentDescription && text ? { contentDescription } : {}),
       },
     }
   }
@@ -642,6 +661,41 @@ export function deviceNodeText(n: { text?: unknown; contentDescription?: unknown
     text: cleanDeviceText(n.text, DEVICE_TEXT_MAX),
     contentDescription: cleanDeviceText(n.contentDescription, DEVICE_TEXT_MAX),
   }
+}
+
+/** Longest device note quoted to the window, and how many of each kind are kept per capture. */
+const NOTE_MAX = 400
+const NOTES_PER_KIND = 5
+
+/**
+ * `warnings` and `overrideErrors` of a `/tree` answer: strings only, whitespace collapsed,
+ * capped, at most NOTES_PER_KIND of each; anything malformed is dropped. Pure; exported for tests.
+ */
+export function deviceNotes(tree: { warnings?: unknown; overrideErrors?: unknown }): DeviceNotes {
+  const warnings = (Array.isArray(tree.warnings) ? tree.warnings : [])
+    .map((w) => cleanDeviceText(w, NOTE_MAX))
+    .filter((w): w is string => w !== undefined)
+    .slice(0, NOTES_PER_KIND)
+  const overrideErrors = (Array.isArray(tree.overrideErrors) ? tree.overrideErrors : [])
+    .map((e) => {
+      const o = (e && typeof e === 'object' ? e : {}) as { id?: unknown; error?: unknown }
+      const id = cleanDeviceText(o.id, 80)
+      const reason = cleanDeviceText(o.error, NOTE_MAX)
+      return id && reason ? { id, reason } : null
+    })
+    .filter((e): e is { id: string; reason: string } => e !== null)
+    .slice(0, NOTES_PER_KIND)
+  return { warnings, overrideErrors }
+}
+
+/**
+ * The warnings not shown yet this session, remembered in `seen`: an agent repeats a
+ * warning on every capture while the cause lasts, the window should show it once. Pure.
+ */
+export function newWarnings(seen: Set<string>, warnings: string[]): string[] {
+  const fresh = warnings.filter((w) => !seen.has(w))
+  for (const w of fresh) seen.add(w)
+  return fresh
 }
 
 /** `Text "Row 1"` when the node shows text, else just the composable name. Pure; exported for tests. */

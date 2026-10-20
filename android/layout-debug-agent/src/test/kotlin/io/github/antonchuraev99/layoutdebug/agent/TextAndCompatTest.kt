@@ -72,6 +72,79 @@ class TextAndCompatTest {
     }
 
     @Test
+    fun `a Text with its wrapper's box hands its text to the wrapper that absorbs it`() {
+        // Card { Text("Save", Modifier.padding(16.dp)) }: Card -> Surface -> Text, one box.
+        val surface = Ln("surface")
+        val textLn = Ln("text")
+        val root = TreeNode("Composition", null, -1, Box(0, 0, 100, 100), null).also { it.id = "root" }
+        val card = TreeNode("Card", "Main.kt", 30, Box(0, 0, 50, 20), null).also { it.library = false; root.add(it) }
+        val surfaceNode = TreeNode("Surface", "Card.kt", 1, Box(0, 0, 50, 20), surface).also(card::add)
+        TreeNode("Text", "Main.kt", 31, Box(0, 0, 50, 20), textLn).also { it.library = false; surfaceNode.add(it) }
+        val texts = mapOf<Any, NodeText>(textLn to NodeText("Save", "Save the draft"))
+
+        TreeShape.attachText(root) { texts[it] }
+        TreeShape.collapse(root)
+
+        val kept = root.children.single()
+        assertEquals("Card", kept.kind)
+        assertTrue(kept.children.isEmpty())
+        assertEquals("Save", kept.text)
+        assertEquals("Save the draft", kept.contentDescription)
+        assertEquals("Card \"Save\" (Main.kt:30)", TreeShape.labelOf(kept))
+    }
+
+    @Test
+    fun `a wrapper with text of its own keeps it`() {
+        val root = TreeNode("Composition", null, -1, Box(0, 0, 100, 100), null).also { it.id = "root" }
+        val outer = TreeNode("Chip", "Main.kt", 5, Box(0, 0, 50, 20), Ln("chip")).also(root::add)
+        TreeNode("Text", "Main.kt", 6, Box(0, 0, 50, 20), Ln("t")).also { outer.add(it) }
+        TreeShape.attachText(root) { if (it.toString() == "chip") NodeText(null, "Filter") else NodeText("Inner", null) }
+        TreeShape.collapse(root)
+        val kept = root.children.single()
+        assertEquals("Inner", kept.text)
+        assertEquals("Filter", kept.contentDescription)
+    }
+
+    @Test
+    fun `only missing or unreachable APIs are called unsupported`() {
+        assertTrue(ComposeVersion.isMissingApi(NoSuchMethodError("setModifier")))
+        assertTrue(ComposeVersion.isMissingApi(NoSuchFieldError("inspection_slot_table_set")))
+        assertTrue(ComposeVersion.isMissingApi(NoClassDefFoundError("androidx/compose/ui/node/RootForTest")))
+        assertTrue(ComposeVersion.isMissingApi(ClassNotFoundException("x")))
+        assertTrue(ComposeVersion.isMissingApi(IllegalAccessException("x")))
+        assertTrue(ComposeVersion.isMissingApi(NoSuchMethodException("x")))
+        assertTrue(!ComposeVersion.isMissingApi(IllegalStateException("x")))
+        assertTrue(!ComposeVersion.isMissingApi(NullPointerException()))
+
+        val missing = ComposeVersion.failure("swapping failed", NoSuchMethodError("setModifier"))
+        assertTrue(missing, missing.contains("This Compose version is not supported"))
+        assertTrue(missing, missing.contains(" on Compose UI "))
+        val bug = ComposeVersion.failure("swapping failed", IllegalStateException("boom"))
+        assertTrue(bug, bug.startsWith("layout-debug agent error: swapping failed (IllegalStateException: boom)"))
+        assertTrue(bug, bug.contains("Please report it"))
+        assertTrue(bug, !bug.contains("not supported"))
+        // The cause inside a reflective call decides, not the wrapper around it.
+        val wrapped = java.lang.reflect.InvocationTargetException(IllegalStateException("inner"))
+        assertTrue(ComposeVersion.failure("x", wrapped).contains("IllegalStateException: inner"))
+        assertTrue(ComposeVersion.failure("x", wrapped).startsWith("layout-debug agent error"))
+    }
+
+    @Test
+    fun `warnings and dropped live edits go out with the tree`() {
+        val root = TreeNode("Composition", null, -1, Box(0, 0, 10, 10), null).also { it.id = "root" }
+        TreeShape.assignIds(root) { "L1" }
+        val (json, _) = TreeShape.serialize(
+            root,
+            TreeMeta(1f, 10, 10, null, null),
+            TreeNotes(listOf("element text is \"unavailable\""), listOf(OverrideError("L7", "dropped"))),
+        )
+        assertTrue(json, json.contains(",\"warnings\":[\"element text is \\\"unavailable\\\"\"]"))
+        assertTrue(json, json.contains(",\"overrideErrors\":[{\"id\":\"L7\",\"error\":\"dropped\"}]"))
+        val (plain, _) = TreeShape.serialize(root, TreeMeta(1f, 10, 10, null, null))
+        assertTrue(!plain.contains("warnings") && !plain.contains("overrideErrors"))
+    }
+
+    @Test
     fun `a prefetched lazy item that is not placed leaves no node at the top-left`() {
         val placed = Ln("placed")
         val unplacedRow = Ln("unplacedRow")

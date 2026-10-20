@@ -43,6 +43,8 @@ class AgentSmokeTest {
         val card = tree.values().first { it.optString("kind") == "RowCard" && it.getBoolean("movable") }
         assertTrue("RowCard comes from the sample's code", card.getJSONObject("source").getString("file") == "MainActivity.kt")
         assertNotNull("a Text carries its string", tree.values().firstOrNull { it.optString("text") == "Row 1" })
+        // SaveCard: Card { Text("Save", padding) } is one box; the node it folds into keeps the text.
+        assertNotNull("the folded Card keeps its Text's string", tree.values().firstOrNull { it.optString("text") == "Save" })
         val id = card.getString("id")
         val y = card.getJSONObject("bounds").getInt("y")
 
@@ -58,27 +60,49 @@ class AgentSmokeTest {
 
     /**
      * After a scroll the list composes the next items ahead (prefetch) without placing them;
-     * ui-tooling reports those at (0, 0), where they would cover the top bar and take its clicks.
-     * List content always has a start padding, so a list node at exactly (0, 0) is such a ghost.
+     * ui-tooling reports those at the window's (0, 0): (0, 0) of the frame on an edge-to-edge
+     * screen, above it (negative y) when the content starts below the status bar. List content
+     * always has a start padding, so a list node at x <= 0 and y <= 0 is such a ghost.
      */
     @Test
     fun itemsComposedAheadAreNotInTheTree() {
         waitFor("the agent to listen") { LayoutDebug.isRunning }
         waitForTree { nodes -> nodes.values().any { it.optString("kind") == "RowCard" } }
-        val metrics = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val metrics = instrumentation.targetContext.resources.displayMetrics
         val x = metrics.widthPixels / 2
-        InstrumentationRegistry.getInstrumentation().uiAutomation
+        instrumentation.uiAutomation
             .executeShellCommand("input swipe $x ${metrics.heightPixels * 3 / 4} $x ${metrics.heightPixels / 2} 400")
             .close()
-        Thread.sleep(1_500)
+        // The swipe runs in another process: wait until the list has moved and settled.
+        val start = System.currentTimeMillis()
+        val scrolled = waitForStableTree { nodes -> nodes.values().none { it.optString("text") == "Row 1" && it.getJSONObject("bounds").getInt("y") > metrics.heightPixels / 4 } || System.currentTimeMillis() - start > 3_000 }
 
-        val ghosts = waitForTree { true }.values().filter {
+        val ghosts = scrolled.values().filter {
             val b = it.getJSONObject("bounds")
             it.optJSONObject("source")?.optString("file") == "MainActivity.kt" &&
-                it.optString("kind") in setOf("RowCard", "Row", "Column", "Box", "Text") &&
-                b.getInt("x") == 0 && b.getInt("y") == 0
+                it.optString("kind") in setOf("RowCard", "SaveCard", "Row", "Column", "Box", "Text") &&
+                b.getInt("x") <= 0 && b.getInt("y") <= 0
         }
-        assertTrue("unplaced list nodes at (0, 0): ${ghosts.map { it.optString("label") }}", ghosts.isEmpty())
+        assertTrue("unplaced list nodes at the window origin: ${ghosts.map { it.optString("label") }}", ghosts.isEmpty())
+    }
+
+    /**
+     * `/tree` once [moved] holds and two captures in a row have the same boxes: a scroll that
+     * has stopped, without guessing how long a fling takes.
+     */
+    private fun waitForStableTree(moved: (JSONObject) -> Boolean): JSONObject {
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        var previous: String? = null
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            val nodes = waitForTree { true }
+            val boxes = nodes.keys().asSequence().sorted().joinToString { "$it=${nodes.getJSONObject(it).getJSONObject("bounds")}" }
+            if (moved(nodes) && boxes == previous) return nodes
+            previous = boxes
+            Thread.sleep(200)
+        }
+        throw AssertionError("the tree did not settle after the scroll")
     }
 
     /** `/tree` until [ready] holds (a frame after a live edit can lag one capture), as id → node. */

@@ -31,6 +31,8 @@ export interface Anchors {
   className?: string
   /** Trimmed own text content, capped. */
   text?: string
+  /** Accessibility label (Android `contentDescription`), capped. */
+  description?: string
   /** `div.card > button.primary:nth-of-type(2)` */
   path: string
 }
@@ -250,6 +252,8 @@ export interface ChatMessage {
  * - `live_edit`         — applying a live override on the device failed.
  * - `reset_edits`       — clearing device overrides failed.
  * - `screenshot`        — the device returned no usable frame.
+ * - `device_warning`    — the capture worked, but the on-device agent reports something
+ *                         missing (e.g. element text it could not read); shown once.
  */
 export type ErrorCode =
   | 'bad_message'
@@ -264,6 +268,7 @@ export type ErrorCode =
   | 'live_edit'
   | 'reset_edits'
   | 'screenshot'
+  | 'device_warning'
 
 /** Codes that describe the device capture path (the UI's Android "connect" state). */
 export const DEVICE_ERROR_CODES: readonly ErrorCode[] = [

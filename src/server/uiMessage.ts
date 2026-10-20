@@ -38,7 +38,7 @@ function liveEditProblem(v: unknown, i: number): string | null {
 /** Far above any real page; a bigger "snapshot" is a bug or an abuse. */
 export const MAX_SNAPSHOT_NODES = 50_000
 
-const OPTIONAL_ANCHORS = ['sourceLoc', 'domId', 'testId', 'className', 'text'] as const
+const OPTIONAL_ANCHORS = ['sourceLoc', 'domId', 'testId', 'className', 'text', 'description'] as const
 
 function rectProblem(v: unknown, where: string): string | null {
   if (!isObject(v)) return `${where} is not an object`

@@ -28,15 +28,26 @@ internal object LiveOverrides {
     private val swaps = IdentityHashMap<Any, Swap>()
     private val overrides = LinkedHashMap<String, Override>()
 
-    /** After every `/tree` capture (main thread): remembers the nodes, re-applies what is active. */
-    fun onCaptured(captured: Map<String, Any>, density: Float) {
+    /**
+     * After every `/tree` capture (main thread): remembers the nodes, re-applies what is
+     * active. An edit that cannot be re-applied is dropped and returned, so the same `/tree`
+     * answer tells the window, instead of the window believing it is still on the device.
+     */
+    fun onCaptured(captured: Map<String, Any>, density: Float): List<OverrideError> {
         nodes = captured
-        for ((id, override) in overrides) {
+        val dropped = ArrayList<OverrideError>()
+        val it = overrides.entries.iterator()
+        while (it.hasNext()) {
+            val (id, override) = it.next()
             val node = nodes[id] ?: continue
-            runCatching { apply(node, override, density) }.onFailure {
-                logError(ComposeVersion.unsupported("re-applying the live edit of $id failed", it))
+            runCatching { apply(node, override, density) }.onFailure { cause ->
+                it.remove()
+                val message = ComposeVersion.failure("re-applying the live edit of $id failed, so it was dropped", cause)
+                logError(message)
+                dropped.add(OverrideError(id, message))
             }
         }
+        return dropped
     }
 
     /** `/override?id=&dx=&dy=&w=&h=`, main thread. Boxes and deltas are in frame pixels. */
@@ -54,7 +65,7 @@ internal object LiveOverrides {
             h = params["h"]?.toIntOrNull() ?: -1,
         )
         runCatching { apply(node, override, density) }.onFailure {
-            return Json.error(ComposeVersion.unsupported("swapping LayoutNode.modifier by reflection failed", it.unwrap()))
+            return Json.error(ComposeVersion.failure("swapping LayoutNode.modifier by reflection failed", it))
         }
         overrides[id] = override
         return "{\"ok\":true,\"id\":${Json.string(id)}}"
@@ -70,16 +81,12 @@ internal object LiveOverrides {
             runCatching {
                 // A recomposition already wrote the source modifier back: leave that one alone.
                 if (access.get(node) === swap.applied) access.set(node, swap.base)
-            }.onFailure { failure = it.unwrap() }
+            }.onFailure { failure = it }
         }
         swaps.clear()
-        failure?.let { return Json.error(ComposeVersion.unsupported("restoring LayoutNode.modifier by reflection failed", it)) }
+        failure?.let { return Json.error(ComposeVersion.failure("restoring LayoutNode.modifier by reflection failed", it)) }
         return "{\"ok\":true,\"cleared\":$count}"
     }
-
-    /** The real cause of a reflective call, not the InvocationTargetException around it. */
-    private fun Throwable.unwrap(): Throwable =
-        (this as? java.lang.reflect.InvocationTargetException)?.targetException ?: this
 
     /**
      * Prepending the tweak means it wraps the node's own modifier chain, so the whole
@@ -90,8 +97,11 @@ internal object LiveOverrides {
      * is then the modifier the source wrote, not the one from before.
      */
     private fun apply(node: Any, override: Override, density: Float) {
-        val access = ModifierAccess.of(node) ?: return
-        val current = access.get(node) ?: return
+        val access = when (val lookup = ModifierAccess.lookup(node.javaClass)) {
+            is ModifierAccess.Lookup.Found -> lookup.accessors
+            is ModifierAccess.Lookup.Missing -> throw NoSuchMethodException(lookup.what)
+        }
+        val current = access.get(node) ?: throw IllegalStateException("LayoutNode.modifier read back as null")
         val previous = swaps[node]
         val base = if (previous != null && current === previous.applied) previous.base else current
         var tweak: Modifier = Modifier

@@ -113,6 +113,9 @@ jobs:
           - { bom: '2026.09.00', activity: '1.13.0', ui: '1.12.1' }
           - { bom: '2026.06.01', activity: '1.13.0', ui: '1.11.4' }
           - { bom: '2026.03.01', activity: '1.13.0', ui: '1.10.6' }
+          - { bom: '2025.10.01', activity: '1.13.0', ui: '1.9.4' }
+          # activity-compose 1.13 would pull Compose UI up to 1.9.2: pin the one of its time.
+          - { bom: '2025.06.01', activity: '1.10.1', ui: '1.8.3' }
           - { bom: '2024.09.00', activity: '1.9.2', ui: '1.7.0' }
     env:
       COMPAT_ARGS: -PcomposeBom=${{ matrix.bom }} -PactivityCompose=${{ matrix.activity }} -PexpectedComposeUi=${{ matrix.ui }}
@@ -136,7 +139,7 @@ jobs:
       - name: Instrumentation test on an emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 36
           arch: x86_64
           target: google_apis
           disable-animations: true

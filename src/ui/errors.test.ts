@@ -16,6 +16,7 @@ const ALL: ErrorCode[] = [
   'live_edit',
   'reset_edits',
   'screenshot',
+  'device_warning',
 ]
 
 describe('errorRoute', () => {
@@ -31,7 +32,7 @@ describe('errorRoute', () => {
   })
 
   test('the server-own errors and a code-less legacy error are general', () => {
-    for (const c of ['bad_message', 'nothing_selected', 'live_edit', 'reset_edits'] as const) {
+    for (const c of ['bad_message', 'nothing_selected', 'live_edit', 'reset_edits', 'device_warning'] as const) {
       assert.equal(errorRoute(c, undefined), 'general', c)
     }
     assert.equal(errorRoute(undefined, undefined), 'general')

@@ -60,6 +60,18 @@ internal class NodeText(val text: String?, val contentDescription: String?) {
     }
 }
 
+/** A live edit the agent could not re-apply after a capture, and has dropped. */
+internal class OverrideError(val id: String, val error: String)
+
+/**
+ * What went wrong around a capture without failing it: [warnings] (the tree is served, but
+ * something is missing, such as element text) and dropped live edits. The desktop tool shows them.
+ */
+internal class TreeNotes(
+    val warnings: List<String> = emptyList(),
+    val overrideErrors: List<OverrideError> = emptyList(),
+)
+
 /** What `/tree` carries next to the nodes. */
 internal class TreeMeta(
     val pxPerUnit: Float,
@@ -154,6 +166,9 @@ internal object TreeShape {
             }
             if (node.layoutNode == null) node.layoutNode = only.layoutNode
             if (node.ownLayoutNode == null) node.ownLayoutNode = only.ownLayoutNode
+            // `Box { Text("Hello") }`: the Text is absorbed, its words must not go with it.
+            if (node.text == null) node.text = only.text
+            if (node.contentDescription == null) node.contentDescription = only.contentDescription
             node.children = only.children
             for (c in node.children) c.parent = node
         }
@@ -163,8 +178,9 @@ internal object TreeShape {
     /**
      * Gives each node the text of its own layout node, looked up by identity: the semantics
      * tree hangs off the same `LayoutNode` objects the slot tables emit, so no bounds
-     * matching is needed. Only the node's own layout node counts (after [collapse], the one
-     * the chain adopted): a `Button` does not take over its label `Text`, which stays its child.
+     * matching is needed. Only the node's own layout node counts: a `Button` does not take over
+     * its label `Text`, which stays its child. Runs before [collapse], while every emitted node
+     * still has its own tree node; [collapse] then hands the text to the node that absorbs it.
      */
     fun attachText(node: TreeNode, lookup: (Any) -> NodeText?) {
         node.ownLayoutNode?.let(lookup)?.let {
@@ -222,11 +238,19 @@ internal object TreeShape {
         }
     }
 
+    /** The layout node behind every movable id (after [assignIds]). */
+    fun layoutNodes(root: TreeNode): Map<String, Any> {
+        val out = HashMap<String, Any>()
+        walk(root) { node -> node.layoutNode?.let { out[node.id] = it } }
+        return out
+    }
+
     /**
      * The `/tree` JSON (the shape `src/server/android.ts` reads as `DeviceTree`) and the
-     * layout node behind every movable id.
+     * layout node behind every movable id. [notes] go out as `warnings` and `overrideErrors`
+     * when there are any.
      */
-    fun serialize(root: TreeNode, meta: TreeMeta): Pair<String, Map<String, Any>> {
+    fun serialize(root: TreeNode, meta: TreeMeta, notes: TreeNotes = TreeNotes()): Pair<String, Map<String, Any>> {
         val layoutNodes = HashMap<String, Any>()
         val out = StringBuilder()
         out.append('{')
@@ -242,6 +266,19 @@ internal object TreeShape {
         meta.packageName?.let { out.append(",\"package\":").appendJsonString(it) }
         meta.pid?.let { out.append(",\"pid\":").append(it) }
         meta.composeVersion?.let { out.append(",\"compose\":").appendJsonString(it) }
+        if (notes.warnings.isNotEmpty()) {
+            out.append(",\"warnings\":[")
+            notes.warnings.forEachIndexed { i, w -> if (i > 0) out.append(','); out.appendJsonString(w) }
+            out.append(']')
+        }
+        if (notes.overrideErrors.isNotEmpty()) {
+            out.append(",\"overrideErrors\":[")
+            notes.overrideErrors.forEachIndexed { i, e ->
+                if (i > 0) out.append(',')
+                out.append("{\"id\":").appendJsonString(e.id).append(",\"error\":").appendJsonString(e.error).append('}')
+            }
+            out.append(']')
+        }
         out.append(",\"nodes\":{")
         var first = true
         walk(root) { node ->

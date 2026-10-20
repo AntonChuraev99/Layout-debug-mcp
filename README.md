@@ -386,23 +386,24 @@ The agent reports who it is in `GET /health`, next to `ok` and `port`: `package`
 
 In Android mode the window shows the device frame instead of an iframe, with the same overlay, selection, drag and reset. The frame refreshes on its own (paused while you drag, backing off when captures fail), and the header chip shows the device model. The first snapshot of a session resets the device's live overrides, so stale ones from a previous window don't linger.
 
-Each node carries its own text and content description from the Compose semantics tree (`Text "Row 1"` in breadcrumbs, `text:` in what the agent gets), marked as page data and capped like web text.
+Each node carries its own text and content description from the Compose semantics tree (`Text "Row 1"` in breadcrumbs, `text:` and `description:` in what the agent gets), marked as page data and capped like web text.
 
 ### Compose compatibility
 
-The agent reads the tree through `@UiToolingDataApi` (no stability guarantee) and swaps modifiers through reflection on internal `LayoutNode` members, so each Compose line is checked on its own. "Verified" means the sample app built against that line and its instrumentation test passed on an emulator: `/tree` has the lazy-list items with source and text, items composed ahead of a scroll are left out, and a live edit moves a row by the requested offset and resets. CI runs the same test for every verified row.
+The agent reads the tree through `@UiToolingDataApi` (no stability guarantee) and swaps modifiers through reflection on internal `LayoutNode` members, so each Compose line is checked on its own. "Verified" means the sample app built against that line and its instrumentation test passed on an emulator (API 36.1 locally, API 36 in CI): `/tree` has the lazy-list items with source and text, a `Text` folded into its `Card` keeps its words, items composed ahead of a scroll are left out, and a live edit moves a row by the requested offset and resets. CI runs the same test for every verified row.
 
 | Compose UI (BOM) | activity-compose | Kotlin | AGP | Status |
 |---|---|---|---|---|
-| 1.12.1 (2026.09.00) | 1.13.0 | 2.4.21 | 9.4.1 | Verified (emulator API 36; also checked by hand on a Pixel 9, Android 17) |
-| 1.11.4 (2026.06.01) | 1.13.0 | 2.4.21 | 9.4.1 | Verified (emulator API 36) |
-| 1.10.6 (2026.03.01) | 1.13.0 | 2.4.21 | 9.4.1 | Verified (emulator API 36) |
-| 1.8, 1.9 | — | — | — | Not verified |
-| 1.7.0 (2024.09.00), the agent's minimum | 1.9.2 | 2.4.21 | 9.4.1 | Verified (emulator API 36) |
+| 1.12.1 (2026.09.00) | 1.13.0 | 2.4.21 | 9.4.1 | Verified (also checked by hand on a Pixel 9, Android 17) |
+| 1.11.4 (2026.06.01) | 1.13.0 | 2.4.21 | 9.4.1 | Verified |
+| 1.10.6 (2026.03.01) | 1.13.0 | 2.4.21 | 9.4.1 | Verified |
+| 1.9.4 (2025.10.01) | 1.13.0 | 2.4.21 | 9.4.1 | Verified |
+| 1.8.3 (2025.06.01) | 1.10.1 | 2.4.21 | 9.4.1 | Verified |
+| 1.7.0 (2024.09.00), the agent's minimum | 1.9.2 | 2.4.21 | 9.4.1 | Verified |
 | Compose Multiplatform (Android target) | — | — | — | Not verified with this library (an earlier prototype of the agent ran on CMP 1.11 / Kotlin 2.3.20) |
 | App on Kotlin < 2.2, or AGP 8.x | — | — | — | Not verified |
 
-When the agent meets a Compose it cannot read or edit, it does not fail silently: `/tree` or the live edit answers with an error that names the Compose UI version and what was not found (for example `LayoutNode has no public setModifier*(Modifier)`), and the window shows it. `/health` reports the version as `compose`.
+When the agent meets a Compose it cannot read or edit, it does not fail silently: `/tree` or the live edit answers with an error that names the Compose UI version and what was not found (for example `LayoutNode has no public setModifier*(Modifier)`), and the window shows it. Any other failure inside the agent is reported as an agent error to report, not as an unsupported version. A live edit the agent can no longer re-apply after the screen recomposes is dropped and the window says so; text it cannot read comes as a warning, once. `/health` reports the version as `compose`.
 
 ### Live video
 

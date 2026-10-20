@@ -22,7 +22,7 @@ import {
   type UiToServer,
   type WaitResponse,
 } from '../shared/protocol.ts'
-import { AndroidAdapter, classifyCaptureError } from './android.ts'
+import { AndroidAdapter, classifyCaptureError, type DeviceNotes, newWarnings } from './android.ts'
 import { Coalescer, FrameCache, parseFrameParam } from './androidCapture.ts'
 import { loadConfig, type Config } from './config.ts'
 import { probeFraming, ProbeError } from './framingProbe.ts'
@@ -138,7 +138,8 @@ const androidCaptures = android
       const takenAt = androidFrames.epoch
       // Windows that show the live video need the tree only: the PNG is most of a capture's time.
       const withPicture = clients.size === 0 || [...clients].some((ws) => !videoWindows.has(ws))
-      const { snapshot, png, pngError } = await android.captureFrame(withPicture)
+      const { snapshot, png, pngError, notes } = await android.captureFrame(withPicture)
+      announceDeviceNotes(notes)
       session.setSnapshot(snapshot)
       noteSnapshot(snapshot)
       androidFrame++
@@ -791,6 +792,28 @@ function onUiMessage(ws: WebSocket, raw: unknown) {
 }
 
 // --- android target ---------------------------------------------------------
+
+/** Agent warnings already shown this session: the agent repeats one on every capture. */
+const shownDeviceWarnings = new Set<string>()
+
+/**
+ * What the on-device agent reported next to a good tree, to every window in its language:
+ * a live edit it could not re-apply and dropped (each time it happens: the window would
+ * otherwise believe the edit is still on the device), and a warning (once per session).
+ */
+function announceDeviceNotes(notes: DeviceNotes) {
+  const fresh = newWarnings(shownDeviceWarnings, notes.warnings)
+  for (const reason of fresh) console.warn(`[layout-debug] the device agent warns: ${reason}`)
+  for (const e of notes.overrideErrors) console.warn(`[layout-debug] the device agent dropped the live edit of ${e.id}: ${e.reason}`)
+  if (!fresh.length && !notes.overrideErrors.length) return
+  for (const ws of clients) {
+    const locale = localeOf(ws)
+    for (const e of notes.overrideErrors) {
+      send(ws, { t: 'error', code: 'live_edit', message: t(locale, 'overrideDropped', { id: e.id, reason: e.reason }) })
+    }
+    for (const reason of fresh) send(ws, { t: 'error', code: 'device_warning', message: t(locale, 'deviceWarning', { reason }) })
+  }
+}
 
 /**
  * A device capture for `ws`: joins the one in flight, if any (polls from several

@@ -35,8 +35,16 @@ internal object TreeCapture {
     /** Layout node → id, kept across captures (main thread only). */
     private val ids = StableIds()
 
-    /** Must run on the main thread: it reads live composition state. */
-    fun capture(activity: Activity, meta: (widthPx: Int, heightPx: Int) -> TreeMeta): Result {
+    /**
+     * Must run on the main thread: it reads live composition state. [afterIds] gets the layout
+     * node behind every id before the JSON is written (live edits are re-applied there), and
+     * returns the edits it had to drop, which go out in the same answer.
+     */
+    fun capture(
+        activity: Activity,
+        meta: (widthPx: Int, heightPx: Int) -> TreeMeta,
+        afterIds: (Map<String, Any>) -> List<OverrideError> = { emptyList() },
+    ): Result {
         val content = activity.findViewById<View>(android.R.id.content)
             ?: return error("the activity has no content view")
         if (content.width <= 0 || content.height <= 0) return error("the content view is not laid out yet")
@@ -45,7 +53,7 @@ internal object TreeCapture {
 
         Agent.inspectionError?.let { return error(it) }
         val tables = runCatching { slotTables(activity.window.decorView) }.getOrElse {
-            return error(ComposeVersion.unsupported("could not read the slot tables (view tag inspection_slot_table_set)", it))
+            return error(ComposeVersion.failure("could not read the slot tables (view tag inspection_slot_table_set)", it))
         }
         if (tables.isEmpty()) {
             return error(
@@ -74,21 +82,25 @@ internal object TreeCapture {
         }
         // Every table failed: the tooling API itself does not work here, not one odd table.
         if (tableRoots.isEmpty()) {
-            return error(ComposeVersion.unsupported("ui-tooling-data could not read any slot table (CompositionData.asTree)", tableFailure))
+            val cause = tableFailure ?: IllegalStateException("no slot table could be read")
+            return error(ComposeVersion.failure("ui-tooling-data could not read any slot table (CompositionData.asTree)", cause))
         }
-        val layoutParent = runCatching {
+        val nesting = runCatching {
             TreeShape.attachSubcompositions(root, tableRoots) { node -> (node as? LayoutInfo)?.parentInfo }
         }
-        layoutParent.exceptionOrNull()?.let {
-            return error(ComposeVersion.unsupported("LayoutInfo.parentInfo failed", it))
+        nesting.exceptionOrNull()?.let {
+            return error(ComposeVersion.failure("nesting subcompositions under their hosts (LayoutInfo.parentInfo) failed", it))
         }
+        // Text before collapse: a Text with its wrapper's box is absorbed by it, and hands its text over.
+        val warnings = ArrayList<String>()
+        val texts = semanticsTexts(activity.window.decorView, warnings)
+        TreeShape.attachText(root) { texts[it] }
         TreeShape.collapse(root)
         TreeShape.inheritLayoutNodes(root)
-        val texts = semanticsTexts(activity.window.decorView)
-        TreeShape.attachText(root) { texts[it] }
         ids.prune()
         TreeShape.assignIds(root, ids::idOf)
-        val (json, nodes) = TreeShape.serialize(root, meta(content.width, content.height))
+        val overrideErrors = afterIds(TreeShape.layoutNodes(root))
+        val (json, nodes) = TreeShape.serialize(root, meta(content.width, content.height), TreeNotes(warnings, overrideErrors))
         return Result(json, nodes)
     }
 
@@ -100,14 +112,17 @@ internal object TreeCapture {
      * Text and content description of every layout node that has them, keyed by the node
      * object: read from the unmerged semantics tree of each Compose root in the window
      * (`RootForTest.semanticsOwner`, public since Compose 1.0). A failure only costs the text:
-     * the tree is still served, and the reason is logged once.
+     * the tree is still served, and the reason goes into [warnings] (the window shows it) and,
+     * once, to logcat.
      */
-    private fun semanticsTexts(view: View): Map<Any, NodeText> {
+    private fun semanticsTexts(view: View, warnings: MutableList<String>): Map<Any, NodeText> {
         val out = IdentityHashMap<Any, NodeText>()
         runCatching { collectTexts(view, out) }.onFailure {
+            val message = ComposeVersion.failure("element text is unavailable: reading the semantics tree failed", it)
+            warnings.add(message)
             if (!textFailureLogged) {
                 textFailureLogged = true
-                logError(ComposeVersion.unsupported("element text is unavailable: reading the semantics tree failed", it))
+                logError(message)
             }
         }
         return out

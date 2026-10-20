@@ -72,6 +72,7 @@ fun SampleScreen() {
         ) {
             item { AgentStatus() }
             item { Actions() }
+            item { SaveCard() }
             items(rows) { title -> RowCard(title) }
         }
     }
@@ -97,6 +98,17 @@ private fun Actions() {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = {}) { Text("Primary") }
         OutlinedButton(onClick = {}) { Text("Secondary") }
+    }
+}
+
+/**
+ * A Text with exactly its card's box (no padding between them): the tree folds the two into
+ * one node, which must keep "Save".
+ */
+@Composable
+private fun SaveCard() {
+    Card {
+        Text("Save")
     }
 }
 

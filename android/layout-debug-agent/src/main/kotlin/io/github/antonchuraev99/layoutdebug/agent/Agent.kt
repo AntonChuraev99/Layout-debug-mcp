@@ -83,7 +83,7 @@ internal object Agent {
         // subcompositions included (see TreeCapture). A Compose without the switch would throw
         // a LinkageError here; the server still starts and /tree names what is missing.
         runCatching { isDebugInspectorInfoEnabled = true }.onFailure {
-            inspectionError = ComposeVersion.unsupported("could not turn on androidx.compose.ui.platform.isDebugInspectorInfoEnabled", it)
+            inspectionError = ComposeVersion.failure("could not turn on androidx.compose.ui.platform.isDebugInspectorInfoEnabled", it)
             logError(inspectionError!!)
         }
 
@@ -201,11 +201,11 @@ internal object Agent {
     }
 
     private fun captureTree(): String = onActivity { activity ->
-        val result = TreeCapture.capture(activity) { w, h ->
-            TreeMeta(density(activity), w, h, packageName, Process.myPid(), ComposeVersion.ui)
-        }
-        if (result.nodes.isNotEmpty()) LiveOverrides.onCaptured(result.nodes, density(activity))
-        result.json
+        TreeCapture.capture(
+            activity,
+            meta = { w, h -> TreeMeta(density(activity), w, h, packageName, Process.myPid(), ComposeVersion.ui) },
+            afterIds = { nodes -> LiveOverrides.onCaptured(nodes, density(activity)) },
+        ).json
     }
 
     /** Runs [block] on the main thread against the resumed activity; an error JSON otherwise. */
