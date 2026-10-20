@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import type { EditRequest, LayoutNode, Snapshot } from '../shared/protocol.ts'
-import { decideRefresh, frameStack, overlaySource, overridesHandedOver, reapplyPlan, showsConnecting, snapshotFingerprint } from './refresh.ts'
+import { decideRefresh, frameStack, overlaySource, overridesHandedOver, showsConnecting, snapshotFingerprint } from './refresh.ts'
 
 describe('frameStack', () => {
   test('one frame when nothing is held', () => {
@@ -145,20 +145,5 @@ describe('overridesHandedOver', () => {
   })
   test('the edit is no longer live (reset by the user) → nothing to drop', () => {
     assert.deepEqual([...overridesHandedOver({ n2: live.n2 }, [req('n1', ['n1'])])], [])
-  })
-})
-
-describe('reapplyPlan', () => {
-  test('re-addresses an edit to the reloaded node by anchor; counts the lost one', () => {
-    const after = page(undefined, 0, 'fresh')
-    const plan = reapplyPlan(
-      [
-        { override: { nodeId: 'n1', dx: 0, dy: 12 }, anchors: { path: 'body > div.avatar' } },
-        { override: { nodeId: 'n7', dx: 3, dy: 0 }, anchors: { path: 'body > div.removed' } },
-      ],
-      after,
-    )
-    assert.deepEqual(plan.apply, [{ nodeId: 'fresh1', dx: 0, dy: 12 }])
-    assert.equal(plan.lost, 1)
   })
 })

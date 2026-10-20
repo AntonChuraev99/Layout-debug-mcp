@@ -8,6 +8,7 @@ import {
   type UiToInspector,
 } from '../shared/protocol.ts'
 import { isKeyMessage } from '../inspector/keys.ts'
+import { frameLoaded, NO_DOCS, snapshotDoc, type FrameDocs } from './documents.ts'
 import { frameOrigin } from './origins.ts'
 
 /** Boxes reappear only this long after the page's last scroll (with the fresh snapshot). */
@@ -63,6 +64,8 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>, 
   /** Guards the one-time reset of tweaks left in the page by a previous UI session. */
   const syncedRef = useRef(false)
   const scroll = useRef<{ at: number; timer: number | undefined }>({ at: 0, timer: undefined })
+  /** Which document of the frame the snapshots come from (documents.ts). */
+  const docs = useRef<FrameDocs>(NO_DOCS)
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -107,7 +110,14 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>, 
           setScrolling(true)
           break
         }
-        case 'snapshot':
+        case 'snapshot': {
+          const d = snapshotDoc(docs.current, data.snapshot.docId)
+          docs.current = d.docs
+          if (d.verdict === 'stale') break
+          // A new document, maybe ahead of the frame's `load`: its node ids start over, so the
+          // edits held by the old ids are void (the page has none of them anyway). The window
+          // sees the new snapshot and the empty edits in the same render.
+          if (d.verdict === 'new') setOverrides({})
           setConnected(true)
           setSnapshot(data.snapshot)
           if (Date.now() - scroll.current.at >= SCROLL_SETTLE_MS) {
@@ -122,6 +132,7 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>, 
             postTo(iframeRef.current, { tag: PROTOCOL_TAG, from: 'ui', t: 'clearAllOverrides' })
           }
           break
+        }
         case 'error':
           setError(data.message)
           break
@@ -184,13 +195,19 @@ export function useTarget(iframeRef: React.RefObject<HTMLIFrameElement | null>, 
   /** A pick during the current Alt press: the page's keyup handler keeps it from the browser menu. */
   const notifyPicked = useCallback(() => send({ tag: PROTOCOL_TAG, from: 'ui', t: 'picked' }), [send])
 
-  /** The iframe reloaded — the inspector will say hello again on its own. */
+  /**
+   * The iframe reloaded — the inspector will say hello again on its own. When the new
+   * document already reported (before this event), its snapshot and edits stay.
+   */
   const onFrameLoad = useCallback(() => {
+    const d = frameLoaded(docs.current)
+    docs.current = d.docs
+    syncedRef.current = true // a fresh page carries no stale inline styles
+    if (!d.reset) return
     setConnected(false)
     setSnapshot(null)
     setOverrides({})
     setScrolling(false)
-    syncedRef.current = true // a fresh page carries no stale inline styles
   }, [])
 
   return {

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: a reload whose new document reports before its load</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 40px; background: #f4f5f7; font: 15px/1.5 system-ui, sans-serif; }
+      .card { width: 260px; margin: 0 0 16px; padding: 16px 20px; background: #fff; border-radius: 12px; }
+    </style>
+  </head>
+  <body>
+    <section class="card" data-testid="first">First</section>
+    <section class="card" data-testid="second">Second</section>
+    <section class="card" data-testid="third">Third</section>
+    <script>
+      // After `drop-first` the page renders without the first card (every node id after it
+      // shifts) and waits for an image the test holds, so `load` comes long after the
+      // inspector's first snapshot.
+      if (sessionStorage.getItem('drop-first') === '1') {
+        document.querySelector('[data-testid="first"]').remove()
+        const img = new Image()
+        img.src = '/held.png'
+        img.alt = ''
+        document.body.appendChild(img)
+      }
+    </script>
+    __INSPECTOR__
+  </body>
+</html>
