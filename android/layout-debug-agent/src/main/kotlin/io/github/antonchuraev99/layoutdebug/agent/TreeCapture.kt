@@ -28,6 +28,9 @@ internal object TreeCapture {
 
     class Result(val json: String, val nodes: Map<String, Any>)
 
+    /** Layout node → id, kept across captures (main thread only). */
+    private val ids = StableIds()
+
     /** Must run on the main thread: it reads live composition state. */
     fun capture(activity: Activity, meta: (widthPx: Int, heightPx: Int) -> TreeMeta): Result {
         val content = activity.findViewById<View>(android.R.id.content)
@@ -58,7 +61,8 @@ internal object TreeCapture {
         TreeShape.attachSubcompositions(root, tableRoots) { node -> (node as? LayoutInfo)?.parentInfo }
         TreeShape.collapse(root)
         TreeShape.inheritLayoutNodes(root)
-        TreeShape.assignIds(root)
+        ids.prune()
+        TreeShape.assignIds(root, ids::idOf)
         val (json, nodes) = TreeShape.serialize(root, meta(content.width, content.height))
         return Result(json, nodes)
     }

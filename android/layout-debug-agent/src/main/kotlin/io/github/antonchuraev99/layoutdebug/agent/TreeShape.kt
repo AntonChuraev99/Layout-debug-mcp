@@ -122,18 +122,29 @@ internal object TreeShape {
     /**
      * Ids must survive a re-capture: an override recorded against one snapshot has to find
      * the same element in the next. A layout node's identity is stable for the life of the
-     * composition, so it wins; anything else falls back to its position in the tree.
+     * composition, so it wins ([idOf], normally [StableIds.idOf]); anything else falls back to
+     * its position in the tree. Ids are unique across the whole tree: `/tree` is a map keyed by
+     * id, and a repeated key would silently drop a node and send a live edit to the wrong one.
      */
-    fun assignIds(node: TreeNode, depth: Int = 0, idOf: (Any) -> String = { "L${System.identityHashCode(it)}" }) {
-        node.depth = depth
+    fun assignIds(root: TreeNode, idOf: (Any) -> String) {
         val seen = HashSet<String>()
+        seen.add(root.id)
+        assignIds(root, 0, idOf, seen)
+    }
+
+    private fun assignIds(node: TreeNode, depth: Int, idOf: (Any) -> String, seen: MutableSet<String>) {
+        node.depth = depth
         node.children.forEachIndexed { index, child ->
             val own = child.ownLayoutNode
             var id = if (own != null) idOf(own) else "${node.id}.$index"
-            // A layout node shared by two kept groups (rare) must not give two nodes one id.
-            if (!seen.add(id)) id = "${node.id}.$index"
+            // One layout node behind two kept groups, or a broken idOf: never two nodes with one id.
+            if (!seen.add(id)) {
+                id = "${node.id}.$index"
+                var n = 2
+                while (!seen.add(id)) id = "${node.id}.$index~${n++}"
+            }
             child.id = id
-            assignIds(child, depth + 1, idOf)
+            assignIds(child, depth + 1, idOf, seen)
         }
     }
 

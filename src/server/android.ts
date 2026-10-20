@@ -397,7 +397,7 @@ export class AndroidAdapter {
 
   async screenshot(budget: Budget = new Budget(CAPTURE_BUDGET_MS)): Promise<Buffer> {
     const { res, body } = await this.request('/screenshot', budget)
-    if (!res.ok) throw new LocalizedError('deviceScreenshotError', { status: res.status })
+    if (!res.ok) throw screenshotError(res.status, body.toString('utf8'))
     return body
   }
 
@@ -414,15 +414,13 @@ export class AndroidAdapter {
     if (body.error) throw new Error(body.error)
   }
 
+  /**
+   * Same rule as every JSON route: a non-2xx status (deviceAgentHttp, from requestJson) or an
+   * `error` field in a 2xx body (the agent could not reach its main thread, say) is a failure.
+   */
   async clearOverrides(): Promise<void> {
-    const { res, body } = await this.request('/overrides/clear', new Budget(CAPTURE_BUDGET_MS))
-    if (!res.ok) {
-      throw new LocalizedError('deviceAgentHttp', {
-        path: '/overrides/clear',
-        status: res.status,
-        reason: agentReason(body.toString('utf8')),
-      })
-    }
+    const body = await this.requestJson<{ ok?: boolean; error?: string }>('/overrides/clear', new Budget(CAPTURE_BUDGET_MS))
+    if (body.error) throw new Error(body.error)
   }
 
   private model: string | null = null
@@ -510,6 +508,18 @@ export function agentReason(body: string): string {
 }
 
 /**
+ * A non-2xx `/screenshot` answer as the window's error: with the agent's own reason when its
+ * body names one (`{"error":"screenshots need Android 8.0 …"}`), else just the status. Pure;
+ * exported for tests.
+ */
+export function screenshotError(status: number, body: string): LocalizedError {
+  const reason = agentReason(body)
+  return reason
+    ? new LocalizedError('deviceScreenshotAgentError', { status, reason })
+    : new LocalizedError('deviceScreenshotError', { status })
+}
+
+/**
  * Does this capture failure need the adb link probe to be told apart from a silent
  * agent? Yes for what looks like "nothing answers" — a timed-out or refused request
  * through the forward, or an adb call on the capture path killed by its timeout. No
@@ -531,7 +541,7 @@ export function classifyCaptureError(err: unknown): ErrorCode {
   if (err instanceof LocalizedError) {
     if (err.key === 'deviceAgentError') return 'device_no_bridge'
     if (err.key === 'deviceWrongApp' || err.key === 'deviceAppNotRunning') return 'device_wrong_app'
-    if (err.key === 'deviceScreenshotError') return 'screenshot'
+    if (err.key === 'deviceScreenshotError' || err.key === 'deviceScreenshotAgentError') return 'screenshot'
     if (err.key === 'deviceUnresponsive') return 'device_unresponsive'
     // The agent answered, just not with a usable tree: its own words are the cause, not the bridge setup.
     if (err.key === 'deviceAgentHttp' || err.key === 'deviceAgentBadReply') return 'device'

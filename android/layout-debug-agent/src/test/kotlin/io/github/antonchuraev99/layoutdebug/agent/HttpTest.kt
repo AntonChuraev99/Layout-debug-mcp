@@ -65,6 +65,20 @@ class HttpTest {
     }
 
     @Test
+    fun `bind retry tries first always, then only in the foreground, and logs once per state change`() {
+        val retry = BindRetry()
+        assertEquals(true, retry.shouldAttempt(inForeground = false))
+        assertEquals(true, retry.failed("EADDRINUSE"))
+        assertEquals(false, retry.failed("EADDRINUSE"))
+        assertEquals(false, retry.shouldAttempt(inForeground = false))
+        assertEquals(true, retry.shouldAttempt(inForeground = true))
+        assertEquals(true, retry.failed("EACCES"))
+        assertEquals(true, retry.bound())
+        assertEquals(false, retry.bound())
+        assertEquals(true, retry.shouldAttempt(inForeground = false))
+    }
+
+    @Test
     fun `response head carries length and closes the connection, without CORS`() {
         val head = Http.responseHead("200 OK", "image/png", 42)
         assertEquals(

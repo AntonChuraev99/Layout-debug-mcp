@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { agentReason, CAPTURE_BUDGET_MS, classifyCaptureError, needsLinkCheck } from './android.ts'
-import { LocalizedError } from './i18n.ts'
+import { agentReason, CAPTURE_BUDGET_MS, classifyCaptureError, needsLinkCheck, screenshotError } from './android.ts'
+import { errorText, LocalizedError } from './i18n.ts'
 
 describe('classifyCaptureError', () => {
   test('adb missing', () => {
@@ -94,6 +94,18 @@ describe('agent answers that are not a usable tree', () => {
     const long = agentReason('x'.repeat(500))
     assert.equal(long.length, ': '.length + 200 + 1)
     assert.ok(long.endsWith('…'))
+  })
+
+  test("a failed screenshot carries the agent's reason, and stays a `screenshot` error", () => {
+    const withReason = screenshotError(503, '{"error":"screenshots need Android 8.0 (API 26) or newer"}')
+    assert.equal(withReason.message, 'screenshot: the agent on the device answered HTTP 503: screenshots need Android 8.0 (API 26) or newer')
+    assert.equal(errorText('ru', withReason), 'скриншот: агент на устройстве ответил HTTP 503: screenshots need Android 8.0 (API 26) or newer')
+    assert.equal(classifyCaptureError(withReason), 'screenshot')
+    assert.equal(needsLinkCheck(withReason), false)
+
+    const bare = screenshotError(500, '')
+    assert.equal(bare.message, 'screenshot: HTTP 500')
+    assert.equal(classifyCaptureError(bare), 'screenshot')
   })
 
   test('the stalled adb link has its own code, and its text says the app is not at fault and how to reconnect', () => {

@@ -12,6 +12,10 @@ import androidx.annotation.RequiresApi
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+/** How long a screenshot waits for PixelCopy (a frame of the window being copied). */
+internal const val PIXEL_COPY_TIMEOUT_MS = 3_000L
 
 /** A PNG of the content view, pixel-aligned with the boxes `/tree` reports, or why there is none. */
 internal object ScreenCapture {
@@ -47,18 +51,27 @@ internal object ScreenCapture {
         val bitmap = Bitmap.createBitmap(area.width(), area.height(), Bitmap.Config.ARGB_8888)
         val latch = CountDownLatch(1)
         var status = -1
+        // Set when we stop waiting: the copy may still be writing into the bitmap, so the
+        // late callback (on copyThread) recycles it instead of us recycling it under its feet.
+        val abandoned = AtomicBoolean(false)
+        val recycled = AtomicBoolean(false)
+        val recycleOnce = { if (recycled.compareAndSet(false, true)) bitmap.recycle() }
         val requested = runCatching {
             PixelCopy.request(activity.window, area, bitmap, { result ->
                 status = result
                 latch.countDown()
+                if (abandoned.get()) recycleOnce()
             }, Handler(copyThread.looper))
         }
         requested.exceptionOrNull()?.let {
             bitmap.recycle()
             return Shot.Failed("PixelCopy failed: ${it.message}")
         }
-        if (!latch.await(MAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-            return Shot.Failed("PixelCopy did not answer within $MAIN_TIMEOUT_SECONDS s")
+        if (!latch.await(PIXEL_COPY_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            abandoned.set(true)
+            // The callback may have finished between the wait and the flag: then nobody else will.
+            if (latch.count == 0L) recycleOnce()
+            return Shot.Failed("PixelCopy did not answer within $PIXEL_COPY_TIMEOUT_MS ms")
         }
         if (status != PixelCopy.SUCCESS) {
             bitmap.recycle()

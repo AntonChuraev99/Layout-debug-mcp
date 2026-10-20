@@ -8,7 +8,9 @@ The on-device side of [layout-debug-mcp](../README.md#android) for Jetpack Compo
 | `layout-debug-noop` | The same `LayoutDebug` API with empty bodies, no dependencies. For `releaseImplementation`. |
 | `sample` | A plain Compose app (Scaffold + LazyColumn) with both wired in. |
 
-The HTTP contract is what [`src/server/android.ts`](../src/server/android.ts) reads; change both together.
+The HTTP contract is what [`src/server/android.ts`](../src/server/android.ts) reads; change both together. Errors are always `{"error":"…"}`: JSON routes answer them with 200, `/screenshot` with 503, refused requests with 4xx; the tool treats a non-2xx status or an `error` field as a failure on every route.
+
+Shared settings of both libraries (SDK levels, Kotlin compatibility, publishing) live in one block in `build.gradle.kts`; a module gets them by applying `com.vanniktech.maven.publish`.
 
 ## Build
 
@@ -38,7 +40,7 @@ Artifacts go to Maven Central through the [Central Portal](https://central.sonat
    signingInMemoryKeyPassword=<key passphrase>
    ```
    Artifacts are signed only when a signing key is configured; Central rejects unsigned uploads.
-4. Set `VERSION_NAME` in `gradle.properties` and the version in the root README setup lines.
+4. Set `VERSION_NAME` in `gradle.properties` (the agent's `/health` `version` is generated from it) and the version in the setup lines of `README.md` and `README.ru.md`.
 5. `./gradlew publishToMavenCentral`, then check the deployment in the Central Portal (Deployments) and press **Publish**. (`publishAndReleaseToMavenCentral` does both.)
 
 `./gradlew publishToMavenLocal` needs no credentials and puts the same artifacts in `~/.m2` for a local check.

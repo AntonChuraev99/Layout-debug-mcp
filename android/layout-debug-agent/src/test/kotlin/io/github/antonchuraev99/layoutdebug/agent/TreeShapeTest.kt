@@ -137,6 +137,40 @@ class TreeShapeTest {
     }
 
     @Test
+    fun `colliding ids in two subtrees still give every node its own id`() {
+        val root = root()
+        val left = node("Left", Box(0, 0, 50, 100), FakeLayoutNode("a")).also(root::add)
+        val right = node("Right", Box(50, 0, 100, 100), FakeLayoutNode("b")).also(root::add)
+        node("Text", Box(0, 0, 10, 10), FakeLayoutNode("c")).also(left::add)
+        node("Text", Box(50, 0, 60, 10), FakeLayoutNode("d")).also(right::add)
+
+        // Every layout node maps to the same raw id: the worst identity-hash collision.
+        TreeShape.assignIds(root) { "L1" }
+        val all = listOf(root, left, right, left.children[0], right.children[0]).map { it.id }
+
+        assertEquals(all.size, all.toSet().size)
+        assertEquals("L1", left.id)
+        assertEquals("root.1", right.id)
+        val (json, nodes) = TreeShape.serialize(root, TreeMeta(1f, 100, 100, null, null))
+        assertEquals(4, nodes.size)
+        all.forEach { id -> assertEquals(1, Regex("\"${Regex.escape(id)}\":\\{").findAll(json).count()) }
+    }
+
+    @Test
+    fun `stable ids give the same object the same id and colliding hashes distinct ids`() {
+        val ids = StableIds(hash = { 7 })
+        val a = Any()
+        val b = Any()
+        val idA = ids.idOf(a)
+        val idB = ids.idOf(b)
+        assertTrue(idA != idB)
+        assertEquals(idA, ids.idOf(a))
+        assertEquals(idB, ids.idOf(b))
+        ids.prune()
+        assertEquals(2, ids.size)
+    }
+
+    @Test
     fun `a table is never attached inside itself`() {
         val self = FakeLayoutNode("Lself")
         val table = node("Table", Box(0, 0, 10, 10))

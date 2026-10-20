@@ -23,7 +23,8 @@ internal const val DEFAULT_PORT = 8790
 /** Application `<meta-data>` that moves the agent to another port. */
 internal const val PORT_META_DATA = "io.github.antonchuraev99.layoutdebug.PORT"
 
-internal const val AGENT_VERSION = "0.1.0"
+/** The artifact version, from VERSION_NAME in android/gradle.properties at build time. */
+internal const val AGENT_VERSION = BuildConfig.AGENT_VERSION
 
 private const val BACKLOG = 16
 private const val WORKERS = 4
@@ -36,6 +37,11 @@ private const val CLIENT_TIMEOUT_MS = 5_000
  * Routes (`src/server/android.ts` depends on them as they are): `/tree`, `/screenshot`,
  * `/override?id=&dx=&dy=&w=&h=`, `/overrides/clear`, and `/health` →
  * `{"ok":true,"port":8790,"package":"…","pid":…,"version":"…"}`.
+ *
+ * Errors: every route answers `{"error":"…"}` with the reason. JSON routes do it with 200
+ * (what older versions of the tool expect from `/tree`); `/screenshot`, whose success body is
+ * a PNG, with 503; refused or malformed requests with 4xx. The tool treats a non-2xx status
+ * or an `error` field as a failure on every route.
  */
 internal object Agent {
 
@@ -109,23 +115,43 @@ internal object Agent {
         return value
     }
 
+    /** Binds the port (retrying while it is taken, see [BindRetry]) and serves; never returns. */
     private fun serve() {
         // Loopback only: `adb forward` reaches it, other machines on the Wi-Fi network do not.
         // IPv4 by address: getLoopbackAddress() may give ::1, and adbd connects to 127.0.0.1 first.
         val loopback = InetAddress.getByAddress("localhost", byteArrayOf(127, 0, 0, 1))
-        val socket = runCatching { ServerSocket(port, BACKLOG, loopback) }
-            .getOrElse {
-                logError(
-                    "could not listen on 127.0.0.1:$port (${it.message}). Another debug app with the " +
-                        "agent may hold the port: close it, or set <meta-data $PORT_META_DATA> and LD_ANDROID_PORT.",
-                )
-                return
+        val retry = BindRetry()
+        while (true) {
+            if (!retry.shouldAttempt(inForeground = current != null)) {
+                Thread.sleep(BIND_RETRY_MS)
+                continue
             }
-        running = true
-        log(
-            "agent $AGENT_VERSION of $packageName (pid ${Process.myPid()}) listening on " +
-                "127.0.0.1:$port; on the computer: adb forward tcp:$port tcp:$port",
-        )
+            val socket = runCatching { ServerSocket(port, BACKLOG, loopback) }.getOrElse {
+                val reason = it.message ?: it.javaClass.simpleName
+                if (retry.failed(reason)) {
+                    logError(
+                        "could not listen on 127.0.0.1:$port ($reason). Another debug app with the agent may hold " +
+                            "the port: close it and this agent binds by itself within ${BIND_RETRY_MS / 1000} s " +
+                            "(it retries while this app is in the foreground), or set <meta-data $PORT_META_DATA> " +
+                            "and the same LD_ANDROID_PORT.",
+                    )
+                }
+                Thread.sleep(BIND_RETRY_MS)
+                continue
+            }
+            if (retry.bound()) log("port $port is free again")
+            running = true
+            log(
+                "agent $AGENT_VERSION of $packageName (pid ${Process.myPid()}) listening on " +
+                    "127.0.0.1:$port; on the computer: adb forward tcp:$port tcp:$port",
+            )
+            accept(socket)
+            running = false
+            logError("the server socket on 127.0.0.1:$port closed; listening again")
+        }
+    }
+
+    private fun accept(socket: ServerSocket) {
         while (!socket.isClosed) {
             val client = runCatching { socket.accept() }
                 .onFailure { logError("accept failed: ${it.message}") }
@@ -135,7 +161,6 @@ internal object Agent {
                 runCatching { client.close() }
             }
         }
-        running = false
     }
 
     private fun handle(client: Socket) {

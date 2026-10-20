@@ -77,6 +77,9 @@ npm run typecheck
 npm test             # unit (node:test)
 npm run test:e2e     # Playwright
 npm run build
+
+# android/ (JDK 17+, SDK in android/local.properties)
+cd android && ./gradlew :layout-debug-agent:testDebugUnitTest :sample:assembleDebug :sample:assembleRelease :sample:verifyReleaseHasNoAgent
 ```
 
 ## Conventions

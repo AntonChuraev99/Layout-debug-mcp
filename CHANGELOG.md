@@ -7,7 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ### Added
 
-- Android: the on-device agent is now part of this repository (`android/`) as a library pair, `io.github.antonchuraev99:layout-debug-agent` for `debugImplementation` and `layout-debug-noop` for `releaseImplementation` (0.1.0, Maven Central). No app code: it starts with the app through androidx.startup and reads `Scaffold`, lazy-list and other `SubcomposeLayout` content through Compose's inspection tables. It listens on the device's `127.0.0.1` only, refuses requests from web pages on the device, and does not start in a non-debuggable build; release builds carry no agent classes (checked in CI). The port can be moved with a manifest `<meta-data>`. Lazy items and Scaffold slots appear under their list or scaffold and are named after the call in your code. `/health` also reports the agent `version`. A sample app is in `android/sample`.
+- Android: the on-device agent is now part of this repository (`android/`) as a library pair, `io.github.antonchuraev99:layout-debug-agent` for `debugImplementation` and `layout-debug-noop` for `releaseImplementation` (0.1.0, Maven Central). No app code: it starts with the app through androidx.startup and reads `Scaffold`, lazy-list and other `SubcomposeLayout` content through Compose's inspection tables. It listens on the device's `127.0.0.1` only, refuses requests from web pages on the device, and does not start in a non-debuggable build; release builds carry no agent classes (checked in CI). The port can be moved with a manifest `<meta-data>`; when it is taken, the agent binds by itself once it frees up (it retries every 3 s while the app is in the foreground). Lazy items and Scaffold slots appear under their list or scaffold and are named after the call in your code. `/health` also reports the agent `version`. A sample app is in `android/sample`.
 
 - Anonymous usage telemetry (tool outcomes, error codes, funnel steps, OS and MCP client name; never content, paths or messages). On by default, off in CI. Turn it off with `LD_TELEMETRY=0`, `DO_NOT_TRACK=1` or `npx layout-debug-mcp telemetry off`; `LD_TELEMETRY_DEBUG=1` prints events instead of sending. The first run says so in the log and in the window. See [Telemetry](./README.md#telemetry).
 - Inbox: **Clear chat** empties the chat history on the server for every open window (requests stay). Also `DELETE /api/chat`.
@@ -19,6 +19,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ### Fixed
 
+- Android: a failed device screenshot shows the agent's reason (for example "no resumed activity") instead of only "screenshot: HTTP 503", and an error the agent reports while resetting live edits is no longer taken for success.
 - The action palette keeps the side it opened on when Details makes it taller, and scrolls inside when its side is short, instead of jumping to another side of the element.
 - The chat keeps the scroll position you set, the text you typed and the focus when the page re-renders the element or the device frame refreshes; it scrolls down by itself only when you are already at the bottom.
 - Focus moving through the palette or into the chat no longer scrolls the frame, so the view stays put when you select elements.
