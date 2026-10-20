@@ -5,12 +5,66 @@ import { describe, test } from 'node:test'
 import { SERVER_PORT, UI_PORT } from '../shared/ports.ts'
 import {
   checkApiRequest,
+  checkProbeTarget,
+  checkProxyRequest,
   checkShutdownRequest,
   checkStaticRequest,
   checkWsUpgrade,
+  isLoopbackHostname,
+  proxyUpstreamUrl,
   resolveStaticPath,
+  tlsOptionsFor,
   type Verdict,
 } from './security.ts'
+
+describe('framing probe: which addresses it may fetch', () => {
+  const target = ['https://staging.example.com']
+  test('loopback names and the configured target', () => {
+    for (const url of ['http://localhost:5173/', 'http://127.0.0.1:3000/x', 'http://[::1]:8080/', 'http://app.localhost/', 'https://staging.example.com/a']) {
+      assert.equal(checkProbeTarget(url, target).ok, true, url)
+    }
+  })
+  test('any other host, a non-http scheme, credentials or garbage are refused', () => {
+    for (const url of ['http://example.com/', 'http://10.0.0.1/', 'http://169.254.169.254/latest', 'file:///etc/passwd', 'http://u:p@localhost/', 'nope', null]) {
+      assert.equal(checkProbeTarget(url, target).ok, false, String(url))
+    }
+  })
+  test('TLS: certificate checks relaxed for loopback only (self-signed dev certs), full for anything else', () => {
+    assert.deepEqual(tlsOptionsFor(new URL('https://localhost:3000/')), { rejectUnauthorized: false })
+    assert.deepEqual(tlsOptionsFor(new URL('https://127.0.0.1/')), { rejectUnauthorized: false })
+    assert.deepEqual(tlsOptionsFor(new URL('https://staging.example.com/')), { rejectUnauthorized: true })
+  })
+  test('loopback host names', () => {
+    assert.equal(isLoopbackHostname('127.1.2.3'), true)
+    assert.equal(isLoopbackHostname('localhost.evil.com'), false)
+    assert.equal(isLoopbackHostname('128.0.0.1'), false)
+  })
+})
+
+describe('framing proxy: never an open proxy', () => {
+  const PORT = 5176
+  const host = { host: `127.0.0.1:${PORT}` }
+  test('a path on the proxy itself is let in', () => {
+    ok(checkProxyRequest('GET', '/src/main.tsx', host, PORT))
+    ok(checkProxyRequest('GET', '/', { host: `localhost:${PORT}` }, PORT))
+  })
+  test('CONNECT and absolute-form request lines are refused', () => {
+    denied(checkProxyRequest('CONNECT', 'example.com:443', host, PORT), /CONNECT/)
+    denied(checkProxyRequest('GET', 'http://example.com/', host, PORT), /not a path/)
+  })
+  test('another Host (DNS rebinding, another port) is refused', () => {
+    denied(checkProxyRequest('GET', '/', { host: `evil.example:${PORT}` }, PORT), /DNS rebinding/)
+    denied(checkProxyRequest('GET', '/', { host: '127.0.0.1:5175' }, PORT), /DNS rebinding/)
+    denied(checkProxyRequest('GET', '/', {}, PORT), /no Host/)
+  })
+  test('the upstream URL stays on the target origin', () => {
+    const t = new URL('http://localhost:5173/app/')
+    assert.equal(proxyUpstreamUrl(t, '/a?b=1')?.href, 'http://localhost:5173/a?b=1')
+    assert.equal(proxyUpstreamUrl(t, '//evil.example/x')?.origin, 'http://localhost:5173', 'a // path is a path here')
+    assert.equal(proxyUpstreamUrl(t, 'http://evil.example/'), null)
+    assert.equal(proxyUpstreamUrl(t, '@evil.example/'), null)
+  })
+})
 
 const ok = (v: Verdict) => assert.deepEqual(v, { ok: true })
 const denied = (v: Verdict, pattern?: RegExp) => {

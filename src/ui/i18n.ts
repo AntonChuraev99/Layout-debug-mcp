@@ -121,6 +121,17 @@ const en = {
   'banner.title': "The inspector didn't respond",
   'banner.text':
     "The page opened, but its layers aren't visible: the inspector script isn't in it. Add it to index.html and reload the page.",
+  'status.frameBlocked': 'Page forbids framing',
+  'framing.title': "The page can't be shown in a frame",
+  'framing.text': 'It sends {header}, so the browser refuses to show it inside this window and the inspector never starts.',
+  'framing.fix':
+    'Turn on the framing proxy for this page: add this to the MCP client\'s env (or set "framingProxy": true and "targetUrl" in layout-debug.config.json), then restart the layout-debug server.',
+  'framing.fixNote':
+    'The proxy listens on 127.0.0.1, forwards to this target only and drops only the framing headers. Or allow framing in your dev server for development.',
+  'framing.otherTarget':
+    'The framing proxy is on for {target} only. To open this page through it, set this in the MCP client\'s env (or "targetUrl" in layout-debug.config.json) and restart the server.',
+  'framing.redirectedAway':
+    'The page redirected to {origin}, which the framing proxy doesn\'t cover (it serves {target}). Make your dev server redirect with a relative path, or make that origin the target in the MCP client\'s env and restart the server.',
 
   // --- shared ---
   'common.close': 'Close',
@@ -353,6 +364,17 @@ const ru: Shape<typeof en> = {
   'banner.title': 'Инспектор не отозвался',
   'banner.text':
     'Страница открылась, но слои не видны: в неё не встроен скрипт инспектора. Добавь его в index.html и обнови страницу.',
+  'status.frameBlocked': 'Страница запрещает встраивание',
+  'framing.title': 'Страницу нельзя показать во фрейме',
+  'framing.text': 'Она отдаёт {header}, поэтому браузер не показывает её внутри этого окна и инспектор не запускается.',
+  'framing.fix':
+    'Включи прокси для встраивания этой страницы: добавь это в env MCP-клиента (или "framingProxy": true и "targetUrl" в layout-debug.config.json) и перезапусти сервер layout-debug.',
+  'framing.fixNote':
+    'Прокси слушает 127.0.0.1, ходит только на эту цель и убирает только заголовки встраивания. Или разреши встраивание в настройках dev-сервера на время разработки.',
+  'framing.otherTarget':
+    'Прокси для встраивания включён только для {target}. Чтобы открыть через него эту страницу, задай это в env MCP-клиента (или "targetUrl" в layout-debug.config.json) и перезапусти сервер.',
+  'framing.redirectedAway':
+    'Страница перенаправила на {origin}, а прокси для встраивания его не покрывает (он обслуживает {target}). Сделай редирект в dev-сервере относительным или укажи этот origin целью в env MCP-клиента и перезапусти сервер.',
 
   'common.close': 'Закрыть',
   'common.more': 'Ещё {count}',

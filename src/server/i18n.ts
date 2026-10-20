@@ -39,6 +39,9 @@ const en = {
     '{expected} (LD_ANDROID_PACKAGE) is not running on the device, and the agent on port {port} did not report ' +
     'which app it belongs to. Start {expected} in a debug build, or fix LD_ANDROID_PACKAGE / "androidPackage" in ' +
     'layout-debug.config.json.',
+  framingProxyUnreachable:
+    'The layout-debug framing proxy could not reach {target} ({reason}). Start your dev server there, or point ' +
+    'LD_TARGET_URL / "targetUrl" at the address it runs on and restart the layout-debug server.',
 } as const
 
 export type MessageKey = keyof typeof en
@@ -73,6 +76,9 @@ const ru: Record<MessageKey, string> = {
   deviceAppNotRunning:
     '{expected} (LD_ANDROID_PACKAGE) не запущено на устройстве, а агент на порту {port} не сообщил, чьё он. ' +
     'Запусти {expected} в debug-сборке или исправь LD_ANDROID_PACKAGE / "androidPackage" в layout-debug.config.json.',
+  framingProxyUnreachable:
+    'Прокси layout-debug для встраивания не достучался до {target} ({reason}). Запусти там dev-сервер или укажи ' +
+    'в LD_TARGET_URL / "targetUrl" адрес, на котором он работает, и перезапусти сервер layout-debug.',
 }
 
 const DICTIONARIES: Record<Locale, Record<MessageKey, string>> = { en, ru }

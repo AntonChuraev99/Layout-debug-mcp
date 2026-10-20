@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   EditRequest,
   ErrorCode,
+  FramingProxyInfo,
   Locale,
   ServerToUi,
   Snapshot,
@@ -49,6 +50,8 @@ export interface ServerState {
   telemetryNotice: boolean
   projectDir: string | null
   targetUrl: string | null
+  /** The framing proxy the server runs for the target, if any; the frame loads through it. */
+  framingProxy: FramingProxyInfo | null
   device: string | null
   /** `ro.product.model` of the device, e.g. "Pixel 8"; null on web or when adb cannot tell. */
   deviceModel: string | null
@@ -91,6 +94,7 @@ export function useServer(locale: Locale) {
     telemetryNotice: false,
     projectDir: null,
     targetUrl: null,
+    framingProxy: null,
     device: null,
     deviceModel: null,
     app: null,
@@ -157,6 +161,11 @@ export function useServer(locale: Locale) {
                 telemetryNotice: msg.telemetry?.showNotice === true,
                 projectDir: msg.projectDir,
                 targetUrl: msg.targetUrl,
+                // Same object while unchanged, so the frame does not reload on a reconnect.
+                framingProxy:
+                  msg.framingProxy && s.framingProxy?.origin === msg.framingProxy.origin && s.framingProxy.target === msg.framingProxy.target
+                    ? s.framingProxy
+                    : (msg.framingProxy ?? null),
                 device: msg.device,
                 // `?? null`: a server older than this field leaves it undefined.
                 deviceModel: msg.deviceModel ?? null,

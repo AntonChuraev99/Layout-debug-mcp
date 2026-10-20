@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ### Added
 
+- Web targets that forbid framing: the window reads the page's headers through the server and, instead of "the inspector didn't respond", names the one that blocks it (`X-Frame-Options: DENY`, CSP `frame-ancestors 'none'`) and how to fix it. The opt-in framing proxy (`LD_FRAMING_PROXY=1` or `"framingProxy": true`, port `LD_FRAMING_PROXY_PORT`, default 5176) serves the configured target on `127.0.0.1` without those headers, keeping the rest of its CSP and allowing only the window to frame it; redirects and WebSocket (HMR) go through it, and its cookies get a per-proxy prefix so cookies of other servers on `127.0.0.1` never reach the target. See [Pages that forbid framing](./README.md#pages-that-forbid-framing).
+
 - Anonymous usage telemetry (tool outcomes, error codes, funnel steps, OS and MCP client name; never content, paths or messages). On by default, off in CI. Turn it off with `LD_TELEMETRY=0`, `DO_NOT_TRACK=1` or `npx layout-debug-mcp telemetry off`; `LD_TELEMETRY_DEBUG=1` prints events instead of sending. The first run says so in the log and in the window. See [Telemetry](./README.md#telemetry).
 - Inbox: **Clear chat** empties the chat history on the server for every open window (requests stay). Also `DELETE /api/chat`.
 - Android: `LD_ANDROID_PACKAGE` (or `androidPackage` in the config file) names the app the on-device agent must belong to; another app on the agent port, or the app not running, is a visible error naming both. When the agent reports `package`/`pid` in `/health`, the window and `layout_snapshot`/`selected_element` show which app the data comes from.
