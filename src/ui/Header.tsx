@@ -2,7 +2,8 @@ import { memo, useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import type { AndroidApp } from '../shared/protocol.ts'
 import { LOCALE_NAMES, LOCALES, useT, type Translate } from './i18n.ts'
 import { Popover } from './Popover.tsx'
-import { BrandGlyph, IconGlobe, IconInbox, IconSmartphone } from './icons.tsx'
+import { BrandGlyph, IconGlobe, IconInbox, IconMove, IconSmartphone } from './icons.tsx'
+import type { StreamPhase } from './useAndroidStream.ts'
 
 export interface StatusInfo {
   tone: 'danger' | 'warn' | 'busy'
@@ -37,10 +38,17 @@ interface Props {
   onOpenUrl: () => void
   /** `app`: the Android app the on-device agent belongs to, when the server knows it. */
   device: { name: string; serial: string | null; app?: Pick<AndroidApp, 'package' | 'source'> | null } | null
+  /** Android: the live video switch; null hides it (web). */
+  video: { on: boolean; phase: StreamPhase; onToggle: () => void } | null
   inbox: { open: number; working: boolean; unread: boolean }
   inboxOpen: boolean
   onInboxToggle: (open: boolean) => void
   inboxContent: ReactNode
+  /** The live edit list: how many, and how many the last reload could not place. */
+  edits: { count: number; missing: number }
+  editsOpen: boolean
+  onEditsToggle: (open: boolean) => void
+  editsContent: ReactNode
   /** Null while the server is out of reach: nobody can tell whether an agent listens. */
   agent: { listening: boolean } | null
   agentOpen: boolean
@@ -58,6 +66,11 @@ export const Header = memo(function Header(p: Props) {
   const inboxRef = useRef<HTMLButtonElement | null>(null)
   const statusRef = useRef<HTMLButtonElement | null>(null)
   const agentRef = useRef<HTMLButtonElement | null>(null)
+  const editsRef = useRef<HTMLButtonElement | null>(null)
+  const editsName =
+    t('edits.title') +
+    (p.edits.count ? `: ${t('edits.count', { count: p.edits.count })}` : '') +
+    (p.edits.missing ? `, ${t('edits.missingCount', { count: p.edits.missing })}` : '')
   const web = p.target === 'web'
   const agentText = p.agent?.listening ? t('agent.listening') : t('agent.none')
 
@@ -115,6 +128,18 @@ export const Header = memo(function Header(p: Props) {
           )}
         </div>
       )}
+      {p.video && (
+        <button
+          type="button"
+          className={`video-btn${p.video.on ? ` video-btn--${p.video.phase}` : ''}`}
+          aria-pressed={p.video.on}
+          title={t('video.toggleTitle')}
+          onClick={p.video.onToggle}
+        >
+          <span className="video-btn__dot" aria-hidden="true" />
+          {t('video.toggle')}
+        </button>
+      )}
 
       <span className="tb__spacer" />
 
@@ -139,6 +164,30 @@ export const Header = memo(function Header(p: Props) {
           )}
         </div>
       )}
+
+      <div className="tb__anchor">
+        <button
+          ref={editsRef}
+          type="button"
+          className={`icon-btn icon-btn--32 inbox-btn${p.editsOpen ? ' is-open' : ''}`}
+          aria-label={editsName}
+          aria-expanded={p.editsOpen}
+          title={editsName}
+          onClick={() => p.onEditsToggle(!p.editsOpen)}
+        >
+          <IconMove />
+          {p.edits.count > 0 && (
+            <span className={`badge${p.edits.missing ? ' badge--warn' : ''}`} aria-hidden="true">
+              {p.edits.count}
+            </span>
+          )}
+        </button>
+        {p.editsOpen && (
+          <Popover anchorRef={editsRef} onClose={() => p.onEditsToggle(false)} label={t('edits.title')} className="pop--inbox">
+            {p.editsContent}
+          </Popover>
+        )}
+      </div>
 
       <div className="tb__anchor">
         <button

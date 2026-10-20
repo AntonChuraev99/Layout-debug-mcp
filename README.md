@@ -275,6 +275,16 @@ Appears next to the selected element, with breadcrumbs of its parents on top:
 | Stop waiting | Removes the "agent is editing" mark if the agent never replied |
 | Details | Box, source, classes, path, live edits, and the "Inside" list of children |
 
+### Live edits that survive a reload
+
+Every live edit is also kept on the server by its element's anchors (path, source location, test id). When the page reloads — your dev server's full reload, the page reloading itself, the window's own refresh, or the window itself reloading — the window finds each element again and puts its edit back. The **Live edits** button in the header (the move icon, with a count) lists them:
+
+- **Not found on the page** — the reload brought no element with that anchor. The edit is kept, not applied, and tried again on the next reload; **Discard** forgets it. The count turns amber while there are any.
+- **On this page** — applied now; **Reset** takes it off, like Reset edits in the palette.
+- **Copy all edits** — the whole list as **Markdown** (to paste into any agent) or **JSON**. Page text inside is quoted, capped and marked as untrusted data, as in the MCP tools.
+
+An edit sent to the agent leaves the list once the agent replies, so it never comes back on top of the code version. `GET /api/live-edits` returns the list, `DELETE /api/live-edits` discards all of it.
+
 ### Element chat, shimmer and auto refresh
 
 <p>
@@ -315,7 +325,32 @@ The window is in English by default. The `EN | RU` switch in the header changes 
 
    or set `LD_TARGET_URL` in the client's `env`, or paste the URL into the window's **Page address** field.
 
-For source mapping add a build step that writes `data-source-loc="file:line"` on JSX elements; without it the agent finds the element by `data-testid`, id and the class string.
+3. Optional, for `file:line` on React / JSX: add the bundled dev-only plugin. It writes `data-source-loc="src/App.tsx:42"` (relative to the project root) on every host element (`<div>`, `<button>`, not `<Card>` or fragments) and keeps one you wrote yourself. It needs `@babel/core` in your project (`npm i -D layout-debug-mcp @babel/core`; the MCP server itself never installs Babel).
+
+   **Vite** (`vite.config.ts`): only `vite dev` runs it (`apply: 'serve'`), `vite build` output has no attribute.
+
+   ```ts
+   import sourceLoc from 'layout-debug-mcp/vite'
+   export default defineConfig({ plugins: [sourceLoc(), react()] })
+   ```
+
+   **Next.js / webpack / Babel** (`babel.config.js`): active only when `BABEL_ENV` (else `NODE_ENV`) is explicitly `development`, which `next dev` sets, so `next build` stays clean. With neither set (e.g. a bare `webpack --mode production`) it stays off and prints one warning; run your dev server with `NODE_ENV=development`. A Babel config makes Next.js use Babel instead of SWC for your files (with webpack fully, with Turbopack since Next.js 16 next to SWC), so builds get slower.
+
+   ```js
+   module.exports = { presets: ['next/babel'], plugins: ['layout-debug-mcp/babel'] }
+   ```
+
+   Both take `{ root }` (absolute, or relative to the project root, e.g. `'../..'` for a monorepo root) when paths should start from another folder. A file Babel can't parse is served unchanged, with a warning naming it. Without the plugin the agent finds the element by `data-testid`, id and the class string.
+
+### Pages that forbid framing
+
+The page is shown in an `iframe`. If it sends `X-Frame-Options` or a CSP `frame-ancestors` that doesn't list the window, the window says so and names the header. Allow framing in your dev server, or turn on the framing proxy for your target:
+
+```json
+{ "targetUrl": "http://localhost:3000", "framingProxy": true }
+```
+
+(or `LD_FRAMING_PROXY=1` with `LD_TARGET_URL` in the client's `env`). The window then loads the page through `http://127.0.0.1:5176` (`LD_FRAMING_PROXY_PORT`). The proxy listens on loopback, forwards to the configured target's origin only, drops `X-Frame-Options` and the `frame-ancestors` directive (the rest of your CSP stays), and lets only the layout-debug window frame the page. Redirects and WebSocket (HMR) connections go through it. Why it is built this way: [ADR](docs/decisions/framing-proxy-2026-10-20.md).
 
 ## Android
 
@@ -369,6 +404,15 @@ The agent reads the tree through `@UiToolingDataApi` (no stability guarantee) an
 
 When the agent meets a Compose it cannot read or edit, it does not fail silently: `/tree` or the live edit answers with an error that names the Compose UI version and what was not found (for example `LayoutNode has no public setModifier*(Modifier)`), and the window shows it. `/health` reports the version as `compose`.
 
+### Live video
+
+**Live video** in the header shows the device screen as a video stream instead of refreshed snapshots, so animations, scrolling and your drag are visible as they happen. The tool starts [scrcpy](https://github.com/Genymobile/scrcpy)'s `scrcpy-server` on the device over adb (video only, no control, no audio), relays its H.264 stream to the window over a local WebSocket, and the window decodes it with WebCodecs. Layer boxes still come from the agent's tree, refreshed as before; while the video shows, the tree capture skips the screenshot.
+
+- **Setup:** install scrcpy 4.x ([install guide](https://github.com/Genymobile/scrcpy#get-the-app)) so `scrcpy` is on `PATH`; the tool uses the `scrcpy-server` that ships with it and asks `scrcpy --version` for the version the server has to be started with. Nothing is bundled with this package. Elsewhere: set `LD_SCRCPY_SERVER` to the `scrcpy-server` file (and `LD_SCRCPY_VERSION` if no `scrcpy` executable sits next to it). scrcpy's own `SCRCPY_SERVER_PATH` is not read, so one left over from another install can't shadow the scrcpy on `PATH`.
+- **Browser:** Chrome, Edge or another Chromium browser (WebCodecs). Elsewhere the switch stays on snapshots and says why.
+- **Fallback:** no scrcpy, a version mismatch, a device that drops the stream or a decoder error turns the video off with the cause in the status pill, and the window goes back to snapshots.
+- Turning the switch off, closing or reloading the window stops `scrcpy-server` on the device and removes its `adb forward`. The choice is remembered per browser.
+
 ## Configuration
 
 Environment variables (set them in the MCP client's `env`) override `layout-debug.config.json` in the folder the tool starts in (`LD_CONFIG` points to another file), which overrides defaults.
@@ -377,10 +421,14 @@ Environment variables (set them in the MCP client's `env`) override `layout-debu
 |---|---|---|---|
 | `LD_TARGET` | `target` | `web` | `web` or `android` |
 | `LD_TARGET_URL` | `targetUrl` | bundled demo | Page to inspect (web) |
+| `LD_FRAMING_PROXY` | `framingProxy` | off | `1` = load the target through a loopback proxy that drops the headers forbidding framing (web, see [Pages that forbid framing](#pages-that-forbid-framing)) |
+| `LD_FRAMING_PROXY_PORT` | `framingProxyPort` | `5176` | Port of that proxy on `127.0.0.1` |
 | `LD_PROJECT_DIR` | `projectDir` | start folder | Your project; file paths in the window are shown relative to it |
 | `LD_DEVICE` | `device` | none | `adb -s` serial (android) |
 | `LD_ANDROID_PORT` | `androidPort` | `8790` | On-device agent port (android) |
 | `LD_ANDROID_PACKAGE` | `androidPackage` | none | Application id the on-device agent must belong to, e.g. `com.example.app` (android) |
+| `LD_SCRCPY_SERVER` | `scrcpyServer` | the one next to `scrcpy` on `PATH` | `scrcpy-server` file for [live video](#live-video) (android) |
+| `LD_SCRCPY_VERSION` | `scrcpyVersion` | from `scrcpy --version` | scrcpy version that file belongs to, e.g. `4.1`; must match exactly (android) |
 | `LD_SERVER_PORT` | none | `5175` | Port of the server and the window |
 | `LD_SERVER_URL` | none | `http://127.0.0.1:5175` | Where the MCP process finds the server (overrides `LD_SERVER_PORT` there) |
 | `LD_WAIT_SECONDS` | none | `40` | How long `wait_for_message` waits before "no message yet" (5–50) |
@@ -426,6 +474,7 @@ Good tools sit nearby; here is where this one differs.
 ## Security
 
 - The server listens on `127.0.0.1` only and checks `Origin` and `Host` on HTTP and WebSocket requests, so a web page open in your browser can't drive it (including via DNS rebinding).
+- The framing proxy is off by default. When on, it listens on `127.0.0.1`, forwards only to the configured target and refuses any other host, and lets only the layout-debug window frame the page.
 - The tool has no agent of its own and never edits your code. Your agent does, with the permissions your MCP client gives it.
 - Page text (class names, text, anchors) reaches the agent marked as untrusted page data and length-capped.
 - Nothing leaves your machine except what goes to the agent you connect, and anonymous usage counts ([Telemetry](#telemetry)) unless you turn them off.
@@ -453,10 +502,11 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 
 ## Limitations
 
-- Live edits are a **preview**, not code: they vanish on page reload or app rebuild until the agent writes them into the source.
+- Live edits are a **preview**, not code. They come back after a page or window reload (see [Live edits that survive a reload](#live-edits-that-survive-a-reload)), but they live in the server's memory: restarting the server loses them unless a window that still has them reconnects. Copy them out or send them to the agent to keep them.
+- Android: the same list is put back when the window starts and when the app restarts (a new pid from the on-device agent); not verified on a real device yet. When the agent does not report its pid, an app restart is not detected: reload the window to put the edits back.
 - The agent has to be listening. Some agents stop the loop on their own after a while; if the header says **No agent listening**, ask again. A request the agent took stays "Agent editing" until it replies with its `requestId`, or you press "Stop waiting".
-- **Web:** the page is shown in an `iframe`, so a target that sends `X-Frame-Options` / `frame-ancestors` won't render. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs your own `data-source-loc` build step (no plugin shipped yet). In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
-- **Android:** the frame is a refreshed snapshot, not a video stream. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees: see [Compose compatibility](#compose-compatibility) for what is verified. Boxes line up with the activity's content view; content in a dialog or popup window is in the tree but not at its place on the frame. Element text is a node's own text (a `Button` shows none, its `Text` child does).
+- **Web:** the page is shown in an `iframe`; a target that sends `X-Frame-Options` / `frame-ancestors` needs the [framing proxy](#pages-that-forbid-framing), one target per server start. Through it the page runs on the proxy's origin, so OAuth redirect URIs and absolute URLs the page builds from its own config still point at the original address. Its cookies are renamed with a `ldp<port>_` prefix (page code reading them by name sees the prefixed name), only those reach the target, and non-HttpOnly ones are readable by other pages on `127.0.0.1`, which browsers don't separate by port. Tree capture is capped at 4000 nodes; the tree syncs 250 ms after the page settles and at least once a second while it keeps changing. `file:line` needs `data-source-loc` on the page: the bundled plugin covers React / JSX with Vite or Babel; other stacks (Vue, Svelte, SWC-only builds) need their own build step. In a text field inside a closed shadow root (`mode: 'closed'`), C and Esc still type but also reach the window (open the chat, clear the selection): from outside, such a field can't be told apart from a plain element.
+- **Android:** without [live video](#live-video) (scrcpy and a Chromium browser) the frame is a refreshed snapshot. Live video assumes the app fills the screen: in split screen or a pop-up window the video and the boxes don't line up, and the window says so. What moves is the selected node: select an inner `Row` and its content moves while the background stays, so go up the breadcrumbs. Hide isn't available yet. An override lives until that composable recomposes; the tool re-applies active overrides after each tree refresh. `@UiToolingDataApi` has no compatibility guarantees: see [Compose compatibility](#compose-compatibility) for what is verified. Boxes line up with the activity's content view; content in a dialog or popup window is in the tree but not at its place on the frame. Element text is a node's own text (a `Button` shows none, its `Text` child does).
 
 ## Troubleshooting
 
@@ -467,10 +517,12 @@ layout-debug-mcp sends anonymous usage data so we can see which clients and targ
 | Window shows "The window didn't start" | The cause line says what failed (a window script didn't load, or nothing rendered within 15 s). Ask the agent to call `open_window` again, then press "Reload page" |
 | Client doesn't list the server | `node -v` is 20.19+ / 22.12+ in the environment the client starts from. GUI apps started from the Start menu or Dock may not see a Node from nvm / Volta / fnm: put the absolute path to `npx` as `command`. Restart the session (Claude Desktop: fully quit) |
 | Windows: `spawn npx ENOENT` | Use `"command": "cmd", "args": ["/c", "npx", "-y", "layout-debug-mcp"]` |
-| Window says the inspector didn't respond | The script tag is in the page, the target allows framing (`X-Frame-Options`, CSP `frame-ancestors`), CSP `script-src` allows `127.0.0.1:5175` |
+| Window says the inspector didn't respond | The script tag is in the page, CSP `script-src` allows `127.0.0.1:5175` |
+| Window says the page can't be shown in a frame | The banner names the header (`X-Frame-Options` or CSP `frame-ancestors`). Allow framing in the dev server, or restart with `LD_FRAMING_PROXY=1` and `LD_TARGET_URL` set to this page (see [Pages that forbid framing](#pages-that-forbid-framing)) |
 | Android: "adb not found" / "No device connected" | `adb devices` lists exactly one device with status `device` (or set `LD_DEVICE`); the window picks it up without a reload |
 | Android: "The device is there, but the app is silent" | The app runs as a debug build with the agent, listening on `LD_ANDROID_PORT` (8790): `adb logcat -s layout-debug` shows `listening on 127.0.0.1:8790`, or why it could not bind |
 | Android: "the agent on port … belongs to …, not to …" | Another debug app holds the agent port. Close it and start yours, or fix `LD_ANDROID_PACKAGE` |
+| Android: **Live video off** | The pill says why. "scrcpy was not found": install scrcpy or set `LD_SCRCPY_SERVER`, then restart the server. "does not match the client": `LD_SCRCPY_VERSION` differs from the `scrcpy-server` file. "Several devices are connected": set `LD_DEVICE`. adb's own words (offline, unauthorized) are shown as it said them |
 | Android: "adb lists …, but the device does not answer over adb" | The adb link has stalled (common with wireless debugging); restarting the app won't help. Turn Wireless debugging off and on, or `adb disconnect <serial>` then `adb connect <ip:port>`, or replug USB. The window picks the device up by itself |
 
 ## Roadmap
@@ -479,9 +531,8 @@ Pre-1.0. Next up:
 
 1. A Claude Code plugin.
 2. Clean-machine install checks with Cursor, VS Code, Codex CLI and other clients.
-3. Live video stream from the device over scrcpy (H.264 decoded in the browser with WebCodecs) instead of refreshed snapshots.
 
-Later, driven by demand: before/after snapshot diff, a source-location plugin for Vite/Babel, Compose Desktop, Android Views, Flutter.
+Later, driven by demand: before/after snapshot diff, Compose Desktop, Android Views, Flutter.
 
 ## Contributing
 

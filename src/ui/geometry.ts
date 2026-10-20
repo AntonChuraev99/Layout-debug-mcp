@@ -145,6 +145,46 @@ export function frameCropRect(rect: Rect, natural: { w: number; h: number }, vie
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
 }
 
+/**
+ * How far the live video's aspect may differ from the tree's viewport and still count as
+ * the same screen: scrcpy downscales to even sizes (1080×2424 → 854×1920 is 0.2% off).
+ */
+export const STREAM_ASPECT_TOLERANCE = 0.02
+
+export interface StreamPlacement {
+  /** Where the video frame is drawn, in frame px (the overlay's space). */
+  rect: Rect
+  /**
+   * `aligned`: the video shows exactly the viewport, stretched over it, so every box lines up.
+   * `rotated`: it is the viewport turned by 90° (the device rotated; the next tree follows).
+   * `mismatch`: another shape (split screen, a window smaller than the display).
+   * Both others are drawn whole and centred inside the viewport, and boxes do not line up.
+   */
+  fit: 'aligned' | 'rotated' | 'mismatch'
+}
+
+/**
+ * Where a live video frame of `video` pixels goes over a device frame whose tree is in
+ * `viewport` frame px. The video covers the whole display and the tree's boxes are in
+ * display pixels, so a video of the viewport's shape is simply scaled onto it (the scale
+ * itself is `video.w / viewport.w`; `pxPerUnit` stays the tree's). Null for empty sizes.
+ */
+export function streamPlacement(video: { w: number; h: number }, viewport: { w: number; h: number }): StreamPlacement | null {
+  if (video.w <= 0 || video.h <= 0 || viewport.w <= 0 || viewport.h <= 0) return null
+  const videoAspect = video.w / video.h
+  const viewAspect = viewport.w / viewport.h
+  if (Math.abs(videoAspect / viewAspect - 1) <= STREAM_ASPECT_TOLERANCE) {
+    return { rect: { x: 0, y: 0, w: viewport.w, h: viewport.h }, fit: 'aligned' }
+  }
+  const k = Math.min(viewport.w / video.w, viewport.h / video.h)
+  const w = video.w * k
+  const h = video.h * k
+  return {
+    rect: { x: (viewport.w - w) / 2, y: (viewport.h - h) / 2, w, h },
+    fit: Math.abs(videoAspect * viewAspect - 1) <= STREAM_ASPECT_TOLERANCE ? 'rotated' : 'mismatch',
+  }
+}
+
 export function union(a: Rect, b: Rect): Rect {
   const x = Math.min(a.x, b.x)
   const y = Math.min(a.y, b.y)

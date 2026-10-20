@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { SERVER_PORT } from '../shared/ports.ts'
-import { CONFIG_FILE_NAME, ConfigError, loadConfig, parseIdleMinutes } from './config.ts'
+import { CONFIG_FILE_NAME, ConfigError, DEFAULT_FRAMING_PROXY_PORT, loadConfig, parseIdleMinutes } from './config.ts'
 
 let base: string
 const dir = (name: string, config?: unknown) => {
@@ -119,10 +119,76 @@ describe('loadConfig: invalid values fail at start with the source named', () =>
     fails(() => loadConfig(dir('pkg-type', { androidPackage: 7 }), {}), /"androidPackage" in .* is 7; expected a string/)
   })
 
+  test('scrcpy: unset is null; the env wins; paths resolve against cwd / the config file; a bad version fails', () => {
+    const none = loadConfig(dir('scrcpy-none'), {})
+    assert.equal(none.scrcpyServer, null)
+    assert.equal(none.scrcpyVersion, null)
+    const fileDir = dir('scrcpy-file', { scrcpyServer: 'tools/scrcpy-server', scrcpyVersion: '4.1' })
+    const fromFile = loadConfig(fileDir, {})
+    assert.equal(fromFile.scrcpyServer, resolve(fileDir, 'tools/scrcpy-server'))
+    assert.equal(fromFile.scrcpyVersion, '4.1')
+    const fromEnv = loadConfig(fileDir, { LD_SCRCPY_SERVER: 'other/server', LD_SCRCPY_VERSION: '3.3.4' })
+    assert.equal(fromEnv.scrcpyServer, resolve(fileDir, 'other/server'))
+    assert.equal(fromEnv.scrcpyVersion, '3.3.4')
+    fails(() => loadConfig(dir('scrcpy-bad-env'), { LD_SCRCPY_VERSION: '4.1; reboot' }), /LD_SCRCPY_VERSION is "4\.1; reboot"; expected a scrcpy version/)
+    fails(() => loadConfig(dir('scrcpy-bad-file', { scrcpyVersion: 'v 4' }), {}), /"scrcpyVersion" in .* is "v 4"; expected a scrcpy version/)
+  })
+
   test('LD_IDLE_EXIT_MINUTES', () => {
     assert.equal(parseIdleMinutes(undefined), 0)
     assert.equal(parseIdleMinutes(' 30 '), 30)
     assert.throws(() => parseIdleMinutes('half an hour'), /LD_IDLE_EXIT_MINUTES="half an hour"/)
     assert.equal(loadConfig(dir('idle'), { LD_IDLE_EXIT_MINUTES: '30' }).idleExitMs, 30 * 60_000)
+  })
+})
+
+describe('loadConfig: framing proxy', () => {
+  const fails = (fn: () => unknown, pattern: RegExp) =>
+    assert.throws(fn, (err: unknown) => err instanceof ConfigError && pattern.test((err as Error).message))
+  const web = { LD_TARGET_URL: 'http://localhost:5173/' }
+
+  test('off unless asked for', () => {
+    assert.equal(loadConfig(dir('fp-off'), web).framingProxyPort, null)
+    assert.equal(loadConfig(dir('fp-env-off', { framingProxy: true }), { ...web, LD_FRAMING_PROXY: '0' }).framingProxyPort, null)
+  })
+  test('on from the env or the file, on the default or the configured port', () => {
+    assert.equal(loadConfig(dir('fp-env'), { ...web, LD_FRAMING_PROXY: '1' }).framingProxyPort, DEFAULT_FRAMING_PROXY_PORT)
+    assert.equal(loadConfig(dir('fp-true'), { ...web, LD_FRAMING_PROXY: 'TRUE' }).framingProxyPort, DEFAULT_FRAMING_PROXY_PORT)
+    assert.equal(loadConfig(dir('fp-file', { framingProxy: true, framingProxyPort: 6100 }), web).framingProxyPort, 6100)
+    assert.equal(
+      loadConfig(dir('fp-port-env', { framingProxy: true, framingProxyPort: 6100 }), { ...web, LD_FRAMING_PROXY_PORT: '6200' })
+        .framingProxyPort,
+      6200,
+    )
+  })
+  test('invalid values fail with the source named', () => {
+    fails(() => loadConfig(dir('fp-bad-env'), { ...web, LD_FRAMING_PROXY: 'yes' }), /LD_FRAMING_PROXY="yes"; expected 1 or 0/)
+    fails(() => loadConfig(dir('fp-bad-file', { framingProxy: 'on' }), web), /"framingProxy" in .* is "on"; expected true or false/)
+    fails(() => loadConfig(dir('fp-bad-port', { framingProxy: true, framingProxyPort: 0 }), web), /"framingProxyPort" in .* is 0/)
+    fails(
+      () => loadConfig(dir('fp-bad-port-env'), { ...web, LD_FRAMING_PROXY: '1', LD_FRAMING_PROXY_PORT: 'x' }),
+      /LD_FRAMING_PROXY_PORT="x"/,
+    )
+  })
+  test('a port typo fails even while the proxy is off (it would silently become the default later)', () => {
+    fails(() => loadConfig(dir('fp-off-bad-port', { framingProxyPort: 'x' }), web), /"framingProxyPort" in .* is "x"/)
+    fails(() => loadConfig(dir('fp-off-bad-port-env'), { ...web, LD_FRAMING_PROXY_PORT: '99999' }), /LD_FRAMING_PROXY_PORT="99999"/)
+  })
+  test('refused for android, a non-http target, or a port the tool or the target already uses', () => {
+    fails(() => loadConfig(dir('fp-android'), { LD_TARGET: 'android', LD_FRAMING_PROXY: '1' }), /for the web target/)
+    fails(() => loadConfig(dir('fp-file-url'), { LD_TARGET_URL: 'file:///x.html', LD_FRAMING_PROXY: '1' }), /not an http\(s\) address/)
+    fails(
+      () => loadConfig(dir('fp-server-port'), { ...web, LD_FRAMING_PROXY: '1', LD_FRAMING_PROXY_PORT: String(SERVER_PORT) }),
+      /also the server port/,
+    )
+    fails(
+      () =>
+        loadConfig(dir('fp-target-port'), {
+          LD_TARGET_URL: 'http://127.0.0.1:6300/',
+          LD_FRAMING_PROXY: '1',
+          LD_FRAMING_PROXY_PORT: '6300',
+        }),
+      /the target's own port/,
+    )
   })
 })

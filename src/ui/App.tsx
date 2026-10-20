@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import type { ChatMessage, EditRequest, ErrorCode, LayoutNode, NodeId, Override, Snapshot, TargetKind } from '../shared/protocol.ts'
+import type { ChatMessage, EditRequest, ErrorCode, FramingProbeResponse, LayoutNode, NodeId, Override, Snapshot, TargetKind } from '../shared/protocol.ts'
+import { framingBlock, type FramingBlock } from '../shared/framing.ts'
 import { ActionPalette } from './ActionPalette.tsx'
 import { AgentPopoverBody } from './AgentConnect.tsx'
-import { serverOrigin } from './origins.ts'
+import { frameOrigin, frameSrcFor, serverOrigin } from './origins.ts'
+import { envSnippet, framingFix } from './framing.ts'
 import { Blank, CopyBlock } from './Blank.tsx'
 import { ChatPopover, type LocalMessage } from './ChatPopover.tsx'
-import { frameCropRect, placeHeldPopover, union, type Side } from './geometry.ts'
+import { frameCropRect, placeHeldPopover, streamPlacement, union, type Side } from './geometry.ts'
 import { CaptureButton } from './CaptureButton.tsx'
 import { elementKey, findIndexed, indexByPath, resolveSelected, type SelectionAnchor } from './selection.ts'
 import { useStableCallback } from './useStable.ts'
@@ -21,15 +23,15 @@ import { useAltKey } from './useAltKey.ts'
 import {
   decideRefresh,
   overridesHandedOver,
-  reapplyPlan,
   frameStack,
   overlaySource,
   REFRESH_NOTE_PREFIX,
   showsConnecting,
   snapshotFingerprint,
-  type CarriedOverride,
   type HeldView,
 } from './refresh.ts'
+import { dropHandedOver, editIsNode, externalListPlan, restorePlan, sameEdits, syncEdits, type LiveEdit } from '../shared/liveEdits.ts'
+import { LiveEditsPanel } from './LiveEditsPanel.tsx'
 import {
   analyzeChat,
   bestAnchor,
@@ -45,6 +47,7 @@ import {
 } from './thread.ts'
 import { TelemetryNotice } from './TelemetryNotice.tsx'
 import { useAndroidAutoRefresh } from './useAndroidAutoRefresh.ts'
+import { useAndroidStream, type StreamFailure } from './useAndroidStream.ts'
 import { useDeviceFrame } from './useDeviceFrame.ts'
 import { RECONNECT_MS, useServer } from './useServer.ts'
 import { useTarget } from './useTarget.ts'
@@ -54,7 +57,7 @@ const ANDROID_OVERRIDE_INTERVAL_MS = 150
 /** How long "no ghost on the old place" stays in the status pill (Android). */
 const GHOST_NOTE_MS = 6000
 /** Why a moved element on Android got no ghost (i18n `ghost.<reason>`). */
-type GhostFailure = 'noFrame' | 'frameChanged' | 'noCanvas' | 'offFrame'
+type GhostFailure = 'noFrame' | 'frameChanged' | 'noCanvas' | 'offFrame' | 'videoMisaligned'
 /** After the page fired `load`, this long without a hello means no inspector script in it. */
 const INSPECTOR_TIMEOUT_MS = 2500
 /** A blip shorter than this (first connect, server restart) is not worth a red pill. */
@@ -69,6 +72,34 @@ const DISMISSED_KEY = 'layout-debug.dismissed'
 const ALT_PICKS_KEY = 'layout-debug.altPicks'
 /** The first-run hint was seen once in this browser. */
 const COACH_SEEN_KEY = 'layout-debug.coachSeen'
+/** Android live video switched on in this browser ('1'). */
+const VIDEO_KEY = 'layout-debug.androidVideo'
+/** A video that keeps another shape than the tree for this long gets a note (a rotation settles sooner). */
+const VIDEO_MISMATCH_NOTE_MS = 1500
+
+/** What the status popover says for each way the live video can stop. */
+const VIDEO_FAILURE_TEXT: Record<StreamFailure['code'], MsgKey> = {
+  unsupported: 'video.unsupported',
+  not_android: 'video.notAndroid',
+  device_no_adb: 'android.noAdbText',
+  device_not_found: 'video.deviceNotFound',
+  device_ambiguous: 'video.deviceAmbiguous',
+  scrcpy_not_found: 'video.notFound',
+  scrcpy_version_unknown: 'video.versionUnknown',
+  scrcpy_failed: 'video.failed',
+  stream_protocol: 'video.protocol',
+  decoder: 'video.decoder',
+  closed: 'video.closed',
+}
+
+/** Off unless switched on here before; blocked storage keeps it off. */
+function readVideoPref(): boolean {
+  try {
+    return localStorage.getItem(VIDEO_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 function readNumber(key: string): number {
   try {
@@ -202,6 +233,10 @@ export function App() {
   const [frameLoaded, setFrameLoaded] = useState(false)
   const [inspectorSilent, setInspectorSilent] = useState(false)
   const [bannerHidden, setBannerHidden] = useState(false)
+  /** The page in the frame forbids framing (the server's probe of its headers), for this frame address. */
+  const [framing, setFraming] = useState<{ src: string; block: FramingBlock; probeUrl: string } | null>(null)
+  /** What the iframe loads: the address itself, or the same path on the framing proxy. */
+  const frameSrc = frameSrcFor(url, state.framingProxy)
 
   /**
    * What the user picked: the node id at the moment of the pick and the anchors that outlive
@@ -219,7 +254,7 @@ export function App() {
   const [focusRequest, setFocusRequest] = useState<{ row: 'first' | 'chat'; nonce: number } | null>(null)
   /** Text typed in the palette's field; it belongs to the selected element and is dropped with it. */
   const [paletteDraft, setPaletteDraft] = useState('')
-  const [popover, setPopover] = useState<'inbox' | 'status' | 'agent' | null>(null)
+  const [popover, setPopover] = useState<'inbox' | 'status' | 'agent' | 'edits' | null>(null)
 
   const [androidOverrides, setAndroidOverrides] = useState<Record<NodeId, Override>>({})
   const [dismissed, setDismissed] = useState<Set<string>>(readDismissed)
@@ -233,10 +268,31 @@ export function App() {
   const [notes, setNotes] = useState<RefreshNote[]>([])
   const sessionStart = useRef(Date.now())
   const cycle = useRef<RefreshCycle | null>(null)
-  /** Live edits to put back once the reloaded page is in (they would be lost with the old document). */
-  const carried = useRef<{ list: CarriedOverride[]; lost: number; requests: EditRequest[] } | null>(null)
-  /** When the reloaded frame fired `load`; a snapshot older than this is from the page that went away. */
+  /** When the frame the window reloaded itself fired `load`: the refresh ends with the first snapshot after it. */
   const reloadLoadedAt = useRef<number | null>(null)
+
+  /**
+   * Every live edit by its element's anchors (src/shared/liveEdits.ts). The page holds the
+   * edits by node id and loses them on reload; this list is kept in step with it, mirrored
+   * to the server, and put back on every page that comes in. The ref is what timers and
+   * effects read; the state is what the panel draws.
+   */
+  const [liveEdits, setLiveEdits] = useState<LiveEdit[]>([])
+  const editsRef = useRef<LiveEdit[]>([])
+  /**
+   * Which page the window shows now (`tokenOf`): on web the inspector's per-document id —
+   * a new document is a new page whether its first snapshot comes before or after the
+   * frame's `load`; on Android a count that bumps on the first device snapshot of a window
+   * session or of a restarted app (`pageGen`, also the web fallback for an inspector without
+   * document ids). The list follows the page only once it was put back on it (`restored`);
+   * before that the page's empty edits mean "not restored yet", not "the user reset everything".
+   */
+  const pageGen = useRef(0)
+  const pageLoadedAt = useRef(0)
+  /** The page (document and address) the list was last put back on. */
+  const restored = useRef<{ token: string; page: string } | null>(null)
+  /** Elements whose edit went to the code with a finished request: still on the page until the refresh, never put back. */
+  const handedRef = useRef<Set<NodeId>>(new Set())
 
   // First `ready` from the server seeds the web target URL from config.
   const seeded = useRef(false)
@@ -312,6 +368,8 @@ export function App() {
   // Android: the device picture is the only copy of how a moved element looked before the
   // move, and the next frame already shows it moved — so the ghost is cut out at the first step.
   const deviceImgRef = useRef<HTMLImageElement | null>(null)
+  /** The live video's canvas (useAndroidStream draws into it); shown instead of the <img> once frames come. */
+  const streamCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const [originGhosts, setOriginGhosts] = useState<Record<NodeId, OriginGhost>>({})
   const dropOriginGhost = useCallback((nodeId: NodeId) => {
     setOriginGhosts((g) => {
@@ -340,25 +398,34 @@ export function App() {
       const snap = live.current.androidSnapshot
       const node = snap?.nodes[nodeId]
       const img = deviceImgRef.current
-      // No <img> at all: the first device picture has not arrived (or failed).
-      if (!snap || !node || !img) return ghostFailed('noFrame')
+      if (!snap || !node) return ghostFailed('noFrame')
       // Its place as shown now: own size edits count, the move does not exist yet.
       const base = effectiveRect(node, prev && { ...prev, dx: 0, dy: 0 })
       const carried = inheritedShifts(snap.nodes, live.current.androidOverrides).get(nodeId)
       const shown = { ...base, x: base.x + (carried?.x ?? 0), y: base.y + (carried?.y ?? 0) }
-      const src = img.currentSrc || img.src
-
-      const cut = () => {
-        const crop = frameCropRect(shown, { w: img.naturalWidth, h: img.naturalHeight }, snap.viewport)
+      const cutFrom = (picture: CanvasImageSource, natural: { w: number; h: number }) => {
+        const crop = frameCropRect(shown, natural, snap.viewport)
         if (!crop) return ghostFailed('offFrame')
         const canvas = document.createElement('canvas')
         canvas.width = Math.max(1, Math.round(crop.w))
         canvas.height = Math.max(1, Math.round(crop.h))
         const ctx = canvas.getContext('2d')
         if (!ctx) return ghostFailed('noCanvas')
-        ctx.drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height)
+        ctx.drawImage(picture, crop.x, crop.y, crop.w, crop.h, 0, 0, canvas.width, canvas.height)
         setOriginGhosts((g) => ({ ...g, [nodeId]: { src: canvas.toDataURL('image/png'), base } }))
       }
+
+      // Live video: its current frame is drawn before this move reached the device.
+      const video = live.current.videoLive ? streamCanvasRef.current : null
+      if (video && video.width > 0) {
+        // A video that does not cover the viewport exactly would put the copy in the wrong place.
+        if (streamPlacement({ w: video.width, h: video.height }, snap.viewport)?.fit !== 'aligned') return ghostFailed('videoMisaligned')
+        return cutFrom(video, { w: video.width, h: video.height })
+      }
+      // No <img> at all: the first device picture has not arrived (or failed).
+      if (!img) return ghostFailed('noFrame')
+      const src = img.currentSrc || img.src
+      const cut = () => cutFrom(img, { w: img.naturalWidth, h: img.naturalHeight })
 
       if (img.complete && img.naturalWidth > 0) return cut()
       // The picture is still being decoded: the auto refresh (every ~0.8 s) or an earlier
@@ -419,8 +486,19 @@ export function App() {
     },
   )
 
-  const deviceFrame = useDeviceFrame(state.androidFrame, isAndroid && Boolean(state.androidSnapshot))
-  const androidCapture = useCallback(() => send({ t: 'androidCapture' }), [send])
+  // Live video (scrcpy + WebCodecs) behind the header switch. The tree keeps coming from the
+  // capture loop below; only the picture moves to the video, and back to snapshots on any failure.
+  const [videoOn, setVideoOn] = useState(() => readVideoPref())
+  const toggleVideo = useCallback(() => {
+    setVideoOn((on) => {
+      writeStorage(VIDEO_KEY, on ? '0' : '1')
+      return !on
+    })
+  }, [])
+  const stream = useAndroidStream(isAndroid && videoOn && state.online, streamCanvasRef)
+  const videoLive = stream.phase === 'live'
+  const deviceFrame = useDeviceFrame(state.androidFrame, isAndroid && Boolean(state.androidSnapshot) && !videoLive)
+  const androidCapture = useCallback(() => send({ t: 'androidCapture', picture: !videoLive }), [send, videoLive])
   const refresh = useAndroidAutoRefresh({
     enabled: isAndroid && state.online,
     paused: dragging,
@@ -430,8 +508,8 @@ export function App() {
   })
 
   // Timers outlive the render that set them; they read the window's current state here.
-  const live = useRef({ isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send })
-  live.current = { isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send }
+  const live = useRef({ isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send, videoLive })
+  live.current = { isAndroid, overrides, androidOverrides, androidSnapshot: state.androidSnapshot, webSnapshot: web.snapshot, androidFrame: state.androidFrame, refresh, web, send, videoLive }
 
   // The web adapter owns its snapshot, so the server needs a copy for MCP consumers.
   // A 4000-node tree on every mutation would flood the socket — at most one send per
@@ -459,16 +537,102 @@ export function App() {
     [],
   )
 
-  // The device keeps its tweaks across a desktop reload, but the ids that addressed
-  // them are gone — so the first snapshot of a session resets the device to a state
-  // the window can actually manage.
-  const androidSynced = useRef(false)
+  // --- live edits that outlive a reload ---
+  /** What the list is keyed by: the address the window opened (web), one device app (Android). */
+  const editPage = isAndroid ? 'android' : url
+  const tokenOf = (snap: Snapshot | null): string =>
+    isAndroid ? `a${pageGen.current}` : snap?.docId ?`d${snap.docId}` : `w${pageGen.current}`
+  const commitEdits = useStableCallback((next: LiveEdit[], share = true) => {
+    const prev = editsRef.current
+    if (JSON.stringify(prev) === JSON.stringify(next)) return
+    // The node ids this page has now are kept locally (Reset finds the element by them);
+    // they alone are no news for the server or another window, which number nodes their own way.
+    const news = !sameEdits(prev, next)
+    editsRef.current = next
+    setLiveEdits(next)
+    if (share && news) send({ t: 'liveEdits', edits: next })
+  })
+
+  // The page's edits changed (a drag, a reset, a recapture with new boxes): the list follows,
+  // once the edits were put back on this page. Declared before the restore effects, so the
+  // render that restores does not sync the page's still-empty edits over the list.
+  const pageSnapshot = isAndroid ? state.androidSnapshot : web.snapshot
+  const pageOverrides = isAndroid ? androidOverrides : web.overrides
   useEffect(() => {
-    if (!isAndroid || !state.androidSnapshot || androidSynced.current) return
+    // A snapshot of a document the list was not put back on yet is not "the user reset
+    // everything" (its node ids even name other elements); another address in the frame is
+    // another page, even before its document loads.
+    if (!pageSnapshot || restored.current?.token !== tokenOf(pageSnapshot) || restored.current.page !== editPage) return
+    for (const id of handedRef.current) if (!pageOverrides[id]) handedRef.current.delete(id)
+    commitEdits(syncEdits(editsRef.current, pageOverrides, pageSnapshot, editPage, handedRef.current))
+  }, [pageOverrides, pageSnapshot, editPage, commitEdits])
+
+  // The server's list: on connect (`seed`) and when another window or `DELETE /api/live-edits` changed it.
+  useEffect(() => {
+    const list = state.liveEdits
+    if (!list) return
+    if (state.liveEditsFrame.seed) {
+      // A restarted server comes back empty; this window still knows the edits: give them back.
+      if (!list.length && editsRef.current.length) {
+        send({ t: 'liveEdits', edits: editsRef.current })
+        return
+      }
+      commitEdits(list, false)
+      return
+    }
+    commitEdits(list, false)
+    // Changed from outside (another window, DELETE /api/live-edits): this page follows both
+    // ways — what left the list comes off, what this page has in the list goes on. Otherwise the
+    // next sync here would read an entry missing from the page as a reset and drop it for all.
+    const L = live.current
+    const snap = L.isAndroid ? L.androidSnapshot : L.webSnapshot
+    if (!snap || restored.current?.token !== tokenOf(snap) || restored.current.page !== editPage) return
+    const current = L.isAndroid ? L.androidOverrides : L.web.overrides
+    const plan = externalListPlan(list, snap, editPage, current)
+    if (L.isAndroid) {
+      if (!plan.clear.length && !plan.apply.length) return
+      // The device agent has no per-node undo: clear everything, then put the result back.
+      const next = { ...current }
+      for (const id of plan.clear) delete next[id]
+      for (const o of plan.apply) next[o.nodeId] = o
+      setAndroidOverrides(next)
+      if (plan.clear.length) {
+        for (const id of plan.clear) dropOriginGhost(id)
+        L.send({ t: 'androidClearOverrides' })
+        for (const o of Object.values(next)) L.send({ t: 'androidOverride', override: o })
+      } else {
+        for (const o of plan.apply) L.send({ t: 'androidOverride', override: o })
+      }
+      return
+    }
+    for (const id of plan.clear) L.web.clearOverride(id)
+    for (const o of plan.apply) L.web.setOverride(o)
+    // Only a new frame matters; the rest is read when it lands.
+  }, [state.liveEditsFrame.seq])
+
+  // Android: the device keeps its tweaks across a desktop reload, but the ids that addressed
+  // them are gone; a restarted app (new pid) has none. Either way the first snapshot resets the
+  // device to a state the window manages and puts the list back on it, found by anchors.
+  const androidSynced = useRef(false)
+  const androidPid = state.app?.pid ?? null
+  const lastPid = useRef<number | null>(null)
+  useEffect(() => {
+    const snap = state.androidSnapshot
+    if (!isAndroid || !snap || state.liveEdits === null) return
+    const restarted = androidSynced.current && androidPid !== null && lastPid.current !== null && androidPid !== lastPid.current
+    if (androidPid !== null) lastPid.current = androidPid
+    if (androidSynced.current && !restarted) return
     androidSynced.current = true
-    send({ t: 'androidClearOverrides' })
+    pageGen.current++
+    handedRef.current = new Set()
+    const plan = restorePlan(editsRef.current, snap, editPage)
+    setAndroidOverrides(Object.fromEntries(plan.apply.map((o) => [o.nodeId, o])))
     setOriginGhosts({})
-  }, [isAndroid, state.androidSnapshot, send])
+    send({ t: 'androidClearOverrides' })
+    for (const o of plan.apply) send({ t: 'androidOverride', override: o })
+    commitEdits(plan.edits)
+    restored.current = { token: tokenOf(snap), page: editPage }
+  }, [isAndroid, state.androidSnapshot, state.liveEdits, androidPid, send])
 
   useEffect(() => {
     send({ t: 'select', nodeId: selectedId })
@@ -524,6 +688,30 @@ export function App() {
     const t = window.setTimeout(() => setInspectorSilent(true), INSPECTOR_TIMEOUT_MS)
     return () => window.clearTimeout(t)
   }, [frameLoaded, web.connected])
+  // A page that forbids framing never runs the inspector. The server reads its headers (the
+  // window can't: the frame is cross-origin), so the window can name the header and the fix
+  // right away. A probe that can't run leaves the generic "didn't respond" path above.
+  useEffect(() => {
+    setFraming(null)
+    if (isAndroid || !frameSrc) return
+    const ctrl = new AbortController()
+    fetch(`/api/framing?url=${encodeURIComponent(frameSrc)}`, { signal: ctrl.signal, cache: 'no-store' })
+      .then(async (res) => {
+        const body = (await res.json().catch(() => null)) as (FramingProbeResponse & { error?: string }) | null
+        if (!res.ok || !body) {
+          console.warn(`[layout-debug] could not check the framing headers of ${frameSrc}: ${body?.error ?? `HTTP ${res.status}`}`)
+          return
+        }
+        const block = framingBlock(body, frameOrigin(body.url) ?? '', location.origin)
+        if (block) setFraming({ src: frameSrc, block, probeUrl: body.url })
+      })
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return
+        console.warn(`[layout-debug] could not check the framing headers of ${frameSrc}: ${err instanceof Error ? err.message : String(err)}`)
+      })
+    return () => ctrl.abort()
+  }, [isAndroid, frameSrc, frameKey])
+  const frameBlocked = !isAndroid && Boolean(url) && framing !== null && framing.src === frameSrc && !web.connected
 
   // --- requests: statuses, marks, unread ---
   const analysis = useMemo(() => analyzeChat(state.chat, state.requests), [state.chat, state.requests])
@@ -625,16 +813,8 @@ export function App() {
       return
     }
     // A reload starts a new document without the window's inline styles: the edits the
-    // agent got go with it on purpose, the others are carried over to the new page.
-    const list: CarriedOverride[] = []
-    let lost = 0
-    for (const o of Object.values(L.overrides)) {
-      if (handed.has(o.nodeId)) continue
-      const anchors = L.webSnapshot?.nodes[o.nodeId]?.anchors
-      if (anchors) list.push({ override: o, anchors })
-      else lost++
-    }
-    carried.current = list.length || lost ? { list, lost, requests: [...c.requests] } : null
+    // agent got go with it on purpose (they left the list at "done"), the others come back
+    // from the list once the new page is in.
     reloadLoadedAt.current = null
     c.phase = 'fresh'
     c.timer = window.setTimeout(() => finishCycle(true), REFRESH_TIMEOUT_MS)
@@ -648,6 +828,11 @@ export function App() {
   const startRefresh = (requests: EditRequest[]) => {
     const L = live.current
     setHolding((s) => new Set([...s, ...requests.map((r) => r.id)]))
+    // The element's own edit is in the code now: it leaves the list at once, so no reload —
+    // the window's own or one the dev server starts during the grace — puts it back. On the
+    // page it stays until the refresh shows the code version.
+    for (const id of overridesHandedOver(L.overrides, requests)) handedRef.current.add(id)
+    commitEdits(dropHandedOver(editsRef.current, requests))
     const c = cycle.current
     if (c) {
       c.requests.push(...requests)
@@ -658,11 +843,8 @@ export function App() {
       } else if (c.phase === 'grace') {
         window.clearTimeout(c.timer)
         c.timer = window.setTimeout(afterGrace, HMR_GRACE_MS)
-      } else if (carried.current) {
-        // Already reloading: what these requests carried must not come back on the new page.
-        const handed = overridesHandedOver(Object.fromEntries(carried.current.list.map((x) => [x.override.nodeId, x.override])), requests)
-        carried.current.list = carried.current.list.filter((x) => !handed.has(x.override.nodeId))
       }
+      // Already reloading: these requests' edits left the list above, so they stay off the new page.
       return
     }
     if (L.isAndroid) {
@@ -689,22 +871,30 @@ export function App() {
     }
   }
 
-  // The reloaded page is in: put the carried edits back, then let the blur go.
+  // A page came in — any load: the window's own refresh, the dev server's full reload, the
+  // page reloading itself. The first snapshot of its document gets the list back, found by
+  // anchors, even when it arrives before the frame's `load`; what is not found stays listed as
+  // unresolved. A refresh the window started ends here too.
   useEffect(() => {
     const snap = web.snapshot
-    const loadedAt = reloadLoadedAt.current
-    if (isAndroid || !snap || loadedAt === null || snap.createdAt < loadedAt) return
-    reloadLoadedAt.current = null
-    const pending = carried.current
-    carried.current = null
-    if (pending) {
-      const { apply, lost } = reapplyPlan(pending.list, snap)
-      for (const o of apply) web.setOverride(o)
-      if (lost + pending.lost) addNotes(pending.requests, 'refresh.lostEdits', lost + pending.lost)
+    // Without a document id (an older inspector), only the load time tells the documents apart.
+    if (isAndroid || !snap || (!snap.docId && snap.createdAt < pageLoadedAt.current)) return
+    const fresh = cycle.current?.target === 'web' && cycle.current.phase === 'fresh' ? cycle.current : null
+    const token = tokenOf(snap)
+    if (restored.current?.token !== token && state.liveEdits !== null) {
+      restored.current = { token, page: editPage }
+      handedRef.current = new Set()
+      const plan = restorePlan(editsRef.current, snap, editPage, web.overrides)
+      for (const o of plan.apply) web.setOverride(o)
+      commitEdits(plan.edits)
+      if (plan.lost && fresh) addNotes(fresh.requests, 'refresh.lostEdits', plan.lost)
     }
-    if (cycle.current?.target === 'web' && cycle.current.phase === 'fresh') finishCycle(false)
-    // Only a new snapshot matters; the helpers read current state through refs.
-  }, [isAndroid, web.snapshot])
+    const loadedAt = reloadLoadedAt.current
+    if (loadedAt === null || snap.createdAt < loadedAt) return
+    reloadLoadedAt.current = null
+    if (fresh) finishCycle(false)
+    // Only a new snapshot (or the server's list arriving) matters; the helpers read current state through refs.
+  }, [isAndroid, web.snapshot, state.liveEdits])
 
   useEffect(() => {
     const c = cycle.current
@@ -713,7 +903,6 @@ export function App() {
 
   // Another page (or target) makes a pending refresh meaningless; its edits belong to the old one.
   useEffect(() => {
-    carried.current = null
     reloadLoadedAt.current = null
     setSwap(null)
     finishCycle(false)
@@ -916,6 +1105,24 @@ export function App() {
     }
   }, [isAndroid, snapshot, canvasBox])
 
+  // The live video over the same rect as the snapshot <img>: stretched onto the viewport when
+  // it has the viewport's shape (the boxes are in display pixels), whole and centred otherwise.
+  const videoPlacement = useMemo(
+    () => (videoLive && stream.size && snapshot ? streamPlacement(stream.size, snapshot.viewport) : null),
+    [videoLive, stream.size, snapshot],
+  )
+  const videoFit = videoPlacement?.fit ?? 'aligned'
+  /** A shape mismatch that outlived a rotation's settling time: said in the status pill. */
+  const [videoMisfit, setVideoMisfit] = useState<'rotated' | 'mismatch' | null>(null)
+  useEffect(() => {
+    if (videoFit === 'aligned') {
+      setVideoMisfit(null)
+      return
+    }
+    const timer = window.setTimeout(() => setVideoMisfit(videoFit), VIDEO_MISMATCH_NOTE_MS)
+    return () => window.clearTimeout(timer)
+  }, [videoFit])
+
   // --- floating card placement (palette or chat) ---
   // A layer scrolled out of the frame keeps its selection, but the palette has nothing to point at.
   const shifts = useMemo(() => (snapshot ? inheritedShifts(snapshot.nodes, overrides) : null), [snapshot, overrides])
@@ -1066,7 +1273,7 @@ export function App() {
     if (!isAndroid) send({ t: 'snapshot', snapshot })
     send({ t: 'select', nodeId: selected.id })
     send({ t: 'overrides', overrides: overrideList })
-    if (!submit(text)) entry.failed = t('send.offline')
+    if (!submit(text, editPage)) entry.failed = t('send.offline')
     setLocal((l) => [...l, entry])
   }
 
@@ -1258,7 +1465,72 @@ export function App() {
         </div>
       ),
     }
-  } else if (isAndroid && snapshot && deviceFrame.error) {
+  } else if (isAndroid && videoOn && stream.phase === 'failed' && stream.failure) {
+    const failure = stream.failure
+    status = {
+      tone: 'warn',
+      text: t('status.videoFailed'),
+      popover: (
+        <div className="pop__body">
+          <h2 className="pop__title">{t('video.failedTitle')}</h2>
+          <p className="pop__text pop__text--wrap">{t(VIDEO_FAILURE_TEXT[failure.code])}</p>
+          {failure.code !== 'unsupported' && <p className="pop__note pop__text--wrap mono">{failure.detail || t('video.noDetails')}</p>}
+          <div className="pop__actions">
+            {failure.code !== 'unsupported' && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  stream.retry()
+                  setPopover(null)
+                }}
+              >
+                {t('video.retry')}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                toggleVideo()
+                setPopover(null)
+              }}
+            >
+              {t('video.turnOff')}
+            </button>
+          </div>
+        </div>
+      ),
+    }
+  } else if (isAndroid && videoLive && videoMisfit && stream.size && snapshot) {
+    status = {
+      tone: 'warn',
+      text: t('status.videoMisaligned'),
+      popover: (
+        <div className="pop__body">
+          <h2 className="pop__title">{t('video.misalignedTitle')}</h2>
+          <p className="pop__text pop__text--wrap">
+            {videoMisfit === 'rotated'
+              ? t('video.rotated')
+              : t('video.mismatch', {
+                  video: `${stream.size.w}×${stream.size.h}`,
+                  viewport: `${snapshot.viewport.w}×${snapshot.viewport.h}`,
+                })}
+          </p>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              toggleVideo()
+              setPopover(null)
+            }}
+          >
+            {t('video.turnOff')}
+          </button>
+        </div>
+      ),
+    }
+  } else if (isAndroid && snapshot && deviceFrame.error && !videoLive) {
     status = {
       tone: 'warn',
       text: t('status.frameError'),
@@ -1293,6 +1565,10 @@ export function App() {
         </div>
       ),
     }
+  } else if (isAndroid && videoOn && stream.phase === 'connecting' && state.online) {
+    // Pushing and starting scrcpy-server takes a second or two; the snapshot shows meanwhile.
+    const text = t('status.videoStarting')
+    status = { tone: 'busy', text, title: stream.version ? `${text} (scrcpy ${stream.version})` : text }
   } else if (state.error && state.errorSeq > hiddenErrorSeq) {
     status = {
       tone: 'danger',
@@ -1316,6 +1592,8 @@ export function App() {
         </div>
       ),
     }
+  } else if (frameBlocked) {
+    status = { tone: 'warn', text: t('status.frameBlocked'), onClick: () => setBannerHidden(false) }
   } else if (!isAndroid && url && inspectorSilent) {
     status = { tone: 'warn', text: t('status.inspectorSilent'), onClick: () => setBannerHidden(false) }
   } else if (!isAndroid && web.error) {
@@ -1330,7 +1608,7 @@ export function App() {
       ),
     }
   }
-  const webConnecting = !isAndroid && showsConnecting({ url, connected: web.connected, silent: inspectorSilent, swapping: holdingFrame })
+  const webConnecting = !isAndroid && showsConnecting({ url, connected: web.connected, silent: inspectorSilent || frameBlocked, swapping: holdingFrame })
   if (!status && webConnecting) status = { tone: 'busy', text: t('status.connectingInspector') }
 
   const loading = webConnecting || (isAndroid && androidState === 'connecting' && state.online)
@@ -1422,6 +1700,11 @@ export function App() {
     [deviceShown, deviceName, state.device, appPackage, appSource],
   )
 
+  const videoSwitch = useMemo(
+    () => (isAndroid ? { on: videoOn, phase: stream.phase, onToggle: toggleVideo } : null),
+    [isAndroid, videoOn, stream.phase, toggleVideo],
+  )
+
   // --- stable props for the memoized children ---
   const pickInfo = useMemo(
     () => ({ alt: picking, blocked: toolsBlocked, compact: learned && !isAndroid, mac: IS_MAC }),
@@ -1440,6 +1723,23 @@ export function App() {
     [inboxItems, loose, state.listening, onOpenFromInbox, openAgentHelp],
   )
   const agentContent = useMemo(() => <AgentPopoverBody listening={state.listening} />, [state.listening])
+  const editsMissing = liveEdits.filter((e) => e.page === editPage && !e.resolved).length
+  const editsInfo = useMemo(() => ({ count: liveEdits.length, missing: editsMissing }), [liveEdits.length, editsMissing])
+  const onEditsToggle = useCallback((open: boolean) => setPopover(open ? 'edits' : null), [])
+  // An edit on the page goes the way Reset edits does (the list follows the page); one that is
+  // not on the page only leaves the list.
+  const onResetEdit = useStableCallback((e: LiveEdit) => {
+    const current = isAndroid ? androidOverrides : web.overrides
+    const snap = isAndroid ? state.androidSnapshot : web.snapshot
+    const node = snap ? Object.values(current).map((o) => snap.nodes[o.nodeId]).find((n) => n && editIsNode(e, snap, n)) : undefined
+    if (node) clearOverride(node.id)
+    else commitEdits(editsRef.current.filter((x) => x !== e))
+  })
+  const onDiscardEdits = useStableCallback((gone: LiveEdit[]) => commitEdits(editsRef.current.filter((x) => !gone.includes(x))))
+  const editsContent = useMemo(
+    () => <LiveEditsPanel edits={liveEdits} page={editPage} onReset={onResetEdit} onDiscard={onDiscardEdits} />,
+    [liveEdits, editPage, onResetEdit, onDiscardEdits],
+  )
   const overlayOffset = useMemo(() => ({ x: device.x, y: device.y }), [device.x, device.y])
   const selectedNodeId = selected?.id ?? null
   const overlayUnread = useMemo(
@@ -1479,10 +1779,15 @@ export function App() {
         onUrlDraft={setUrlDraft}
         onOpenUrl={onOpenUrl}
         device={deviceChip}
+        video={videoSwitch}
         inbox={inboxInfo}
         inboxOpen={popover === 'inbox'}
         onInboxToggle={onInboxToggle}
         inboxContent={inboxContent}
+        edits={editsInfo}
+        editsOpen={popover === 'edits'}
+        onEditsToggle={onEditsToggle}
+        editsContent={editsContent}
         agent={agentInfo}
         agentOpen={popover === 'agent' && state.online}
         onAgentToggle={onAgentToggle}
@@ -1505,24 +1810,42 @@ export function App() {
       >
         {isAndroid ? (
           snapshot ? (
-            // No picture yet (first frame in flight or failed): the overlay still works on the
-            // tree, and a failed frame is explained by the status pill.
-            deviceFrame.src && (
-              <img
-                ref={deviceImgRef}
-                className="device"
-                src={deviceFrame.src}
-                alt={t('canvas.deviceAlt')}
-                draggable={false}
-                onError={deviceFrame.onDecodeError}
-                style={{
-                  left: device.x,
-                  top: device.y,
-                  width: snapshot.viewport.w * device.scale,
-                  height: snapshot.viewport.h * device.scale,
-                }}
-              />
-            )
+            <>
+              {/* No picture yet (first frame in flight or failed): the overlay still works on the
+                  tree, and a failed frame is explained by the status pill. */}
+              {deviceFrame.src && !videoLive && (
+                <img
+                  ref={deviceImgRef}
+                  className="device"
+                  src={deviceFrame.src}
+                  alt={t('canvas.deviceAlt')}
+                  draggable={false}
+                  onError={deviceFrame.onDecodeError}
+                  style={{
+                    left: device.x,
+                    top: device.y,
+                    width: snapshot.viewport.w * device.scale,
+                    height: snapshot.viewport.h * device.scale,
+                  }}
+                />
+              )}
+              {/* Mounted while the video is on, so frames can be drawn before it is shown. */}
+              {videoOn && (
+                <canvas
+                  ref={streamCanvasRef}
+                  className="device device--video"
+                  role="img"
+                  aria-label={t('canvas.deviceAlt')}
+                  hidden={!videoLive}
+                  style={{
+                    left: device.x + (videoPlacement?.rect.x ?? 0) * device.scale,
+                    top: device.y + (videoPlacement?.rect.y ?? 0) * device.scale,
+                    width: (videoPlacement?.rect.w ?? snapshot.viewport.w) * device.scale,
+                    height: (videoPlacement?.rect.h ?? snapshot.viewport.h) * device.scale,
+                  }}
+                />
+              )}
+            </>
           ) : androidState === 'device-error' ? (
             <Blank icon={<IconSmartphone size={18} />} title={t('deviceError.title')}>
               <p className="blank__text">{t('deviceError.text')}</p>
@@ -1561,18 +1884,22 @@ export function App() {
             f.held ? (
               // The page before the window's own refresh: only a picture now. The bridge talks
               // to the new frame under it, so nothing it posts counts any more.
-              <iframe key={f.key} src={url} className="frame--held" aria-hidden="true" tabIndex={-1} />
+              <iframe key={f.key} src={frameSrc} className="frame--held" aria-hidden="true" tabIndex={-1} />
             ) : (
               <iframe
                 key={f.key}
                 ref={iframeRef}
-                src={url}
+                src={frameSrc}
                 title={t('canvas.frameTitle')}
                 onLoad={() => {
                   web.onFrameLoad()
                   setFrameLoaded(true)
                   const loadedAt = Date.now()
-                  if (cycle.current?.phase === 'fresh' || carried.current) reloadLoadedAt.current = loadedAt
+                  // A new document, without the edits of the old one: the list goes back on it
+                  // with its first snapshot, and follows it only from then on.
+                  pageGen.current++
+                  pageLoadedAt.current = loadedAt
+                  if (cycle.current?.phase === 'fresh') reloadLoadedAt.current = loadedAt
                   // The held old page goes with the first snapshot taken after this load.
                   setSwap((s) => (s && s.view.loadedAt === null ? { ...s, view: { ...s.view, loadedAt } } : s))
                   // The inspector posts its first snapshot on its own — possibly before this event,
@@ -1730,7 +2057,47 @@ export function App() {
           )}
         </div>
 
-        {!isAndroid && url && inspectorSilent && !bannerHidden && (
+        {frameBlocked && framing && !bannerHidden && (
+          <div className="banner" role="status">
+            <div className="banner__head">
+              <IconPlug size={15} />
+              <h2 className="banner__title">{t('framing.title')}</h2>
+              <button type="button" className="icon-btn" aria-label={t('common.close')} title={t('common.close')} onClick={() => setBannerHidden(true)}>
+                <IconX size={14} />
+              </button>
+            </div>
+            <p className="banner__text">
+              {rich('framing.text', { header: <code className="mono">{`${framing.block.header}: ${framing.block.value}`}</code> })}
+            </p>
+            {(() => {
+              const fix = framingFix(frameSrc, framing.probeUrl, state.framingProxy)
+              if (fix.kind === 'redirectedAway') {
+                return (
+                  <>
+                    <p className="banner__text">{t('framing.redirectedAway', { origin: fix.origin, target: fix.target })}</p>
+                    <CopyBlock text={envSnippet({ LD_FRAMING_PROXY: '1', LD_TARGET_URL: framing.probeUrl })} />
+                  </>
+                )
+              }
+              if (fix.kind === 'otherTarget') {
+                return (
+                  <>
+                    <p className="banner__text">{t('framing.otherTarget', { target: fix.target })}</p>
+                    <CopyBlock text={envSnippet({ LD_FRAMING_PROXY: '1', LD_TARGET_URL: url })} />
+                  </>
+                )
+              }
+              return (
+                <>
+                  <p className="banner__text">{t('framing.fix')}</p>
+                  <CopyBlock text={envSnippet({ LD_FRAMING_PROXY: '1', LD_TARGET_URL: url })} />
+                  <p className="banner__text">{t('framing.fixNote')}</p>
+                </>
+              )
+            })()}
+          </div>
+        )}
+        {!isAndroid && url && inspectorSilent && !frameBlocked && !bannerHidden && (
           <div className="banner" role="status">
             <div className="banner__head">
               <IconPlug size={15} />

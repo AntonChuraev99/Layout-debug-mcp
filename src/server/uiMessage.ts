@@ -1,3 +1,4 @@
+import { MAX_LIVE_EDITS } from '../shared/liveEdits.ts'
 import type { UiToServer } from '../shared/protocol.ts'
 
 /** On failure `t` is the frame's type when it had a string one, so the caller can settle that flow. */
@@ -14,6 +15,24 @@ function overrideProblem(v: unknown): string | null {
   if (v.height != null && !isNumber(v.height)) return 'override.height is not a number'
   if (v.hidden != null && typeof v.hidden !== 'boolean') return 'override.hidden is not a boolean'
   return null
+}
+
+function liveEditProblem(v: unknown, i: number): string | null {
+  const where = `edits[${i}]`
+  if (!isObject(v)) return `${where} is not an object`
+  for (const k of ['page', 'kind', 'label'] as const) if (typeof v[k] !== 'string') return `${where}.${k} is not a string`
+  if (v.target !== 'web' && v.target !== 'android') return `${where}.target is not web/android`
+  if (v.unit !== 'css-px' && v.unit !== 'dp') return `${where}.unit is not css-px/dp`
+  if (!isNumber(v.pxPerUnit)) return `${where}.pxPerUnit is not a number`
+  if (typeof v.resolved !== 'boolean') return `${where}.resolved is not a boolean`
+  if (!Number.isInteger(v.occurrence) || (v.occurrence as number) < 0) return `${where}.occurrence is not a whole number ≥ 0`
+  const a = v.anchors
+  if (!isObject(a) || typeof a.path !== 'string') return `${where}.anchors.path is not a string`
+  for (const k of OPTIONAL_ANCHORS) {
+    if (a[k] != null && typeof a[k] !== 'string') return `${where}.anchors.${k} is not a string`
+  }
+  const o = overrideProblem(v.override)
+  return o ? `${where}.${o}` : null
 }
 
 /** Far above any real page; a bigger "snapshot" is a bug or an abuse. */
@@ -118,16 +137,29 @@ export function parseUiMessage(raw: string): ParsedUiMessage {
       }
       return { ok: true, msg: data as UiToServer }
     }
+    case 'liveEdits': {
+      if (!Array.isArray(data.edits)) return bad('edits is not an array')
+      if (data.edits.length > MAX_LIVE_EDITS) return bad(`edits has ${data.edits.length} entries, more than ${MAX_LIVE_EDITS}`)
+      for (let i = 0; i < data.edits.length; i++) {
+        const p = liveEditProblem(data.edits[i], i)
+        if (p) return bad(p)
+      }
+      return { ok: true, msg: data as UiToServer }
+    }
     case 'submit':
-      return typeof data.comment === 'string' ? { ok: true, msg: data as UiToServer } : bad('comment is not a string')
+      if (typeof data.comment !== 'string') return bad('comment is not a string')
+      return data.page == null || typeof data.page === 'string' ? { ok: true, msg: data as UiToServer } : bad('page is not a string')
     case 'androidOverride': {
       const p = overrideProblem(data.override)
       return p ? bad(p) : { ok: true, msg: data as UiToServer }
     }
+    case 'androidCapture':
+      return data.picture == null || typeof data.picture === 'boolean'
+        ? { ok: true, msg: data as UiToServer }
+        : bad('picture is not a boolean')
     case 'clearRequests':
     case 'clearChat':
     case 'telemetryNoticeDismissed':
-    case 'androidCapture':
     case 'androidClearOverrides':
       return { ok: true, msg: data as UiToServer }
     default:

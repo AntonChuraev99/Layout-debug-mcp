@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>e2e: a page that forbids framing</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 32px; }
+      .card { width: 280px; padding: 16px; border: 1px solid #ccc; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <!-- Served with X-Frame-Options / CSP frame-ancestors by framing.spec.ts. -->
+    <h1 data-testid="framed-title">Framing is forbidden</h1>
+    <div class="card" data-testid="framed-card">Shown only through the framing proxy</div>
+    __INSPECTOR__
+  </body>
+</html>

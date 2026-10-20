@@ -61,6 +61,7 @@ const LINK_TTL_MS = 5_000
 /** A capture: the tree, and the device picture taken alongside it (or why there is none). */
 export interface CapturedFrame {
   snapshot: Snapshot
+  /** Null: not asked for (`withPicture: false`) when `pngError` is null too, failed otherwise. */
   png: Buffer | null
   pngError: unknown
 }
@@ -217,15 +218,16 @@ export class AndroidAdapter {
    * one round-trip instead of two in a row, and the picture belongs to the same
    * moment as the tree. A failed picture does not fail the capture — the tree is
    * still good, and the window's frame request reports the picture's own error.
+   * `withPicture: false` (every window shows the live video) asks for the tree only.
    */
-  async captureFrame(): Promise<CapturedFrame> {
+  async captureFrame(withPicture = true): Promise<CapturedFrame> {
     // The link was found dead moments ago: say so at once instead of another 6 s wait.
     const known = this.link
     if (known && known.verdict.kind === 'unresponsive' && Date.now() - known.at < LINK_TTL_MS) {
       throw this.unresponsiveError()
     }
     const budget = new Budget(CAPTURE_BUDGET_MS)
-    const [tree, png] = await Promise.allSettled([this.capture(budget), this.screenshot(budget)])
+    const [tree, png] = await Promise.allSettled([this.capture(budget), withPicture ? this.screenshot(budget) : Promise.resolve(null)])
     if (tree.status === 'rejected') throw await this.explainFailure(tree.reason, budget)
     if (this.link?.verdict.kind === 'unresponsive') {
       console.log(`[layout-debug] the adb link to ${this.device ?? 'the device'} answers again`)

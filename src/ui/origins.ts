@@ -1,3 +1,5 @@
+import type { FramingProxyInfo } from '../shared/protocol.ts'
+
 /**
  * Origins the window talks to. Pure functions: the call sites pass `location` and the build
  * mode, so these run under node:test as they are.
@@ -18,6 +20,23 @@ export function frameOrigin(src: string | null | undefined): string | null {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
   return url.origin
+}
+
+/**
+ * What the iframe loads for the address the user opened: the same path on the framing proxy
+ * when one serves that address's origin, the address itself otherwise. The address field
+ * keeps showing what the user typed.
+ */
+export function frameSrcFor(url: string, proxy: FramingProxyInfo | null | undefined): string {
+  if (!proxy || !url) return url
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return url
+  }
+  if (parsed.origin !== proxy.target) return url
+  return `${proxy.origin}${parsed.pathname}${parsed.search}${parsed.hash}`
 }
 
 export interface WindowLocation {

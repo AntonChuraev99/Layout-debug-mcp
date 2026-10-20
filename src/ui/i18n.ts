@@ -84,10 +84,41 @@ const en = {
   'ghost.frameChanged': 'A newer device picture arrived before the copy was taken and may already show the element moved. The move itself worked.',
   'ghost.noCanvas': "This browser can't draw on a canvas, so the copy can't be cut out. The move itself worked.",
   'ghost.offFrame': 'The element lies outside the device picture, so there is nothing to copy. The move itself worked.',
+  'ghost.videoMisaligned':
+    "The live video doesn't match the layer tree (the device turned, or the app doesn't fill the screen), so a copy cut from it would show the wrong place. The move itself worked. Wait for the next layer tree after a rotation, or turn live video off.",
   'frameError.title': "The device didn't return a picture",
   'frameError.textStale': 'The layer tree is fresh, but the frame shows the last picture that loaded. Boxes may not match what you see.',
   'frameError.textNone': 'The layer tree is in, but the device returned no picture for it, so only the boxes are shown.',
   'frameError.noDetails': 'The server gave no reason.',
+  'video.toggle': 'Live video',
+  'video.toggleTitle': 'Show the device screen as live video (scrcpy). Boxes still come from the layer tree.',
+  'status.videoFailed': 'Live video off',
+  'status.videoMisaligned': "Video and boxes don't match",
+  'video.failedTitle': 'Live video stopped, the frame is a refreshed snapshot again',
+  'video.unsupported':
+    "This browser has no WebCodecs video decoder. Live video works in Chrome, Edge and other Chromium browsers; here the frame stays a refreshed snapshot.",
+  'video.notFound':
+    'scrcpy was not found. Install scrcpy (it ships the scrcpy-server the tool starts on the device), or point LD_SCRCPY_SERVER at a scrcpy-server file, restart the server and try again.',
+  'video.versionUnknown':
+    "scrcpy-server was found, but not its version, which has to match exactly. Set LD_SCRCPY_VERSION to the scrcpy version the file comes from (for example 4.1), restart the server and try again.",
+  'video.failed':
+    "adb couldn't start scrcpy-server on the device, or it stopped. What it said is below. A version mismatch is the usual cause: LD_SCRCPY_VERSION must match the scrcpy-server file.",
+  'video.deviceNotFound':
+    "adb can't reach the device to start the video: it is not connected, offline or not authorized (what adb said is below). Check that adb devices lists it with the status device, then try again.",
+  'video.deviceAmbiguous':
+    'Several devices are connected and adb will not pick one for the video. Set LD_DEVICE to the serial of the device to stream, restart the server and try again.',
+  'status.videoStarting': 'Starting live video…',
+  'video.protocol': "The device sent a video this window can't read. Check that scrcpy is version 4.x.",
+  'video.decoder': "The browser's video decoder refused the stream.",
+  'video.closed': 'The server closed the video connection without saying why. If it is older than this window, restart it.',
+  'video.notAndroid': "The server isn't in Android mode.",
+  'video.noDetails': 'No details.',
+  'video.retry': 'Try again',
+  'video.turnOff': 'Turn live video off',
+  'video.misalignedTitle': "The live video doesn't match the layer tree",
+  'video.rotated': 'The device turned. The boxes line up again with the next layer tree.',
+  'video.mismatch':
+    "The video is {video} and the app's window is {viewport}: the app doesn't fill the screen (split screen, a pop-up window), so boxes may not line up with the video. Turn live video off for exact boxes.",
   'stale.title': "The device snapshot isn't updating",
   'stale.text':
     'The last capture attempts failed ({count}). The frame shows the last good snapshot; the window retries less and less often.',
@@ -121,6 +152,17 @@ const en = {
   'banner.title': "The inspector didn't respond",
   'banner.text':
     "The page opened, but its layers aren't visible: the inspector script isn't in it. Add it to index.html and reload the page.",
+  'status.frameBlocked': 'Page forbids framing',
+  'framing.title': "The page can't be shown in a frame",
+  'framing.text': 'It sends {header}, so the browser refuses to show it inside this window and the inspector never starts.',
+  'framing.fix':
+    'Turn on the framing proxy for this page: add this to the MCP client\'s env (or set "framingProxy": true and "targetUrl" in layout-debug.config.json), then restart the layout-debug server.',
+  'framing.fixNote':
+    'The proxy listens on 127.0.0.1, forwards to this target only and drops only the framing headers. Or allow framing in your dev server for development.',
+  'framing.otherTarget':
+    'The framing proxy is on for {target} only. To open this page through it, set this in the MCP client\'s env (or "targetUrl" in layout-debug.config.json) and restart the server.',
+  'framing.redirectedAway':
+    'The page redirected to {origin}, which the framing proxy doesn\'t cover (it serves {target}). Make your dev server redirect with a relative path, or make that origin the target in the MCP client\'s env and restart the server.',
 
   // --- shared ---
   'common.close': 'Close',
@@ -238,6 +280,25 @@ const en = {
   'tag.dismissed': 'Not waiting',
   'tag.stale': 'No reply',
 
+  // --- live edit list ---
+  'edits.title': 'Live edits',
+  'edits.count': { one: '{count} live edit', other: '{count} live edits' },
+  'edits.missingCount': { one: '{count} not found on the page', other: '{count} not found on the page' },
+  'edits.copyAll': 'Copy all edits',
+  'edits.copyMarkdown': 'Markdown',
+  'edits.copyJson': 'JSON',
+  'edits.copiedMarkdown': 'Copied as Markdown',
+  'edits.copiedJson': 'Copied as JSON',
+  'edits.emptyTitle': 'No live edits',
+  'edits.emptySub': 'Move, resize or hide a layer. The edit is kept here and comes back after the page reloads.',
+  'edits.missing': 'Not found on the page',
+  'edits.missingNote': "The page reloaded without these elements, so their edits aren't applied. The next reload tries again.",
+  'edits.discard': 'Discard',
+  'edits.discardMissing': { one: 'Discard {count}', other: 'Discard all {count}' },
+  'edits.here': 'On this page',
+  'edits.reset': 'Reset',
+  'edits.elsewhere': 'Other pages',
+
   // --- relative time ---
   'ago.now': 'just now',
   'ago.min': '{count} min',
@@ -317,10 +378,41 @@ const ru: Shape<typeof en> = {
   'ghost.frameChanged': 'Пока снималась копия, пришёл новый кадр устройства — на нём элемент мог быть уже сдвинут. Сам сдвиг применён.',
   'ghost.noCanvas': 'Браузер не умеет рисовать на canvas — копию не вырезать. Сам сдвиг применён.',
   'ghost.offFrame': 'Элемент за пределами кадра устройства — копировать нечего. Сам сдвиг применён.',
+  'ghost.videoMisaligned':
+    'Живое видео не совпадает с деревом слоёв (устройство повернули или приложение занимает не весь экран), поэтому копия из него показала бы не то место. Сам сдвиг применён. После поворота дождись следующего дерева слоёв или выключи живое видео.',
   'frameError.title': 'Устройство не отдало картинку',
   'frameError.textStale': 'Дерево слоёв свежее, а в кадре — последняя картинка, которая загрузилась. Рамки могут не совпадать с видимым.',
   'frameError.textNone': 'Дерево слоёв пришло, а картинку к нему устройство не отдало — видны только рамки.',
   'frameError.noDetails': 'Сервер не назвал причину.',
+  'video.toggle': 'Живое видео',
+  'video.toggleTitle': 'Показывать экран устройства живым видео (scrcpy). Рамки по-прежнему берутся из дерева слоёв.',
+  'status.videoFailed': 'Живое видео выключено',
+  'status.videoMisaligned': 'Видео и рамки не совпадают',
+  'video.failedTitle': 'Живое видео остановилось, в кадре снова обновляемый снимок',
+  'video.unsupported':
+    'В этом браузере нет видеодекодера WebCodecs. Живое видео работает в Chrome, Edge и других браузерах на Chromium; здесь в кадре остаётся обновляемый снимок.',
+  'video.notFound':
+    'scrcpy не найден. Установи scrcpy (с ним идёт scrcpy-server, который инструмент запускает на устройстве) или укажи файл scrcpy-server в LD_SCRCPY_SERVER, перезапусти сервер и попробуй снова.',
+  'video.versionUnknown':
+    'scrcpy-server найден, но не его версия, а она должна совпадать точно. Укажи в LD_SCRCPY_VERSION версию scrcpy, из которой этот файл (например, 4.1), перезапусти сервер и попробуй снова.',
+  'video.failed':
+    'adb не смог запустить scrcpy-server на устройстве, или он остановился. Что он сказал — ниже. Обычная причина — разные версии: LD_SCRCPY_VERSION должна совпадать с файлом scrcpy-server.',
+  'video.deviceNotFound':
+    'adb не достаёт до устройства, чтобы запустить видео: оно не подключено, offline или не авторизовано (что сказал adb — ниже). Проверь, что adb devices показывает его со статусом device, и попробуй снова.',
+  'video.deviceAmbiguous':
+    'Подключено несколько устройств, и adb не выбирает одно для видео. Задай в LD_DEVICE serial нужного устройства, перезапусти сервер и попробуй снова.',
+  'status.videoStarting': 'Запускаю живое видео…',
+  'video.protocol': 'Устройство прислало видео, которое окно не может прочитать. Проверь, что scrcpy версии 4.x.',
+  'video.decoder': 'Видеодекодер браузера не принял поток.',
+  'video.closed': 'Сервер закрыл видеосоединение, не назвав причину. Если он старше этого окна — перезапусти его.',
+  'video.notAndroid': 'Сервер не в режиме Android.',
+  'video.noDetails': 'Подробностей нет.',
+  'video.retry': 'Попробовать снова',
+  'video.turnOff': 'Выключить живое видео',
+  'video.misalignedTitle': 'Живое видео не совпадает с деревом слоёв',
+  'video.rotated': 'Устройство повернули. Рамки снова совпадут со следующим деревом слоёв.',
+  'video.mismatch':
+    'Видео — {video}, а окно приложения — {viewport}: приложение занимает не весь экран (разделённый экран, всплывающее окно), поэтому рамки могут не совпадать с видео. Для точных рамок выключи живое видео.',
   'stale.title': 'Снимок устройства не обновляется',
   'stale.text':
     'Последние попытки снять экран не удались ({count}). В кадре — последний удачный снимок; окно повторяет попытки всё реже.',
@@ -353,6 +445,17 @@ const ru: Shape<typeof en> = {
   'banner.title': 'Инспектор не отозвался',
   'banner.text':
     'Страница открылась, но слои не видны: в неё не встроен скрипт инспектора. Добавь его в index.html и обнови страницу.',
+  'status.frameBlocked': 'Страница запрещает встраивание',
+  'framing.title': 'Страницу нельзя показать во фрейме',
+  'framing.text': 'Она отдаёт {header}, поэтому браузер не показывает её внутри этого окна и инспектор не запускается.',
+  'framing.fix':
+    'Включи прокси для встраивания этой страницы: добавь это в env MCP-клиента (или "framingProxy": true и "targetUrl" в layout-debug.config.json) и перезапусти сервер layout-debug.',
+  'framing.fixNote':
+    'Прокси слушает 127.0.0.1, ходит только на эту цель и убирает только заголовки встраивания. Или разреши встраивание в настройках dev-сервера на время разработки.',
+  'framing.otherTarget':
+    'Прокси для встраивания включён только для {target}. Чтобы открыть через него эту страницу, задай это в env MCP-клиента (или "targetUrl" в layout-debug.config.json) и перезапусти сервер.',
+  'framing.redirectedAway':
+    'Страница перенаправила на {origin}, а прокси для встраивания его не покрывает (он обслуживает {target}). Сделай редирект в dev-сервере относительным или укажи этот origin целью в env MCP-клиента и перезапусти сервер.',
 
   'common.close': 'Закрыть',
   'common.more': 'Ещё {count}',
@@ -466,6 +569,30 @@ const ru: Shape<typeof en> = {
   'tag.error': 'Ошибка',
   'tag.dismissed': 'Не ждём',
   'tag.stale': 'Без ответа',
+
+  // --- список живых правок ---
+  'edits.title': 'Живые правки',
+  'edits.count': { one: '{count} живая правка', few: '{count} живые правки', many: '{count} живых правок', other: '{count} живой правки' },
+  'edits.missingCount': {
+    one: '{count} не найдена на странице',
+    few: '{count} не найдены на странице',
+    many: '{count} не найдено на странице',
+    other: '{count} не найдено на странице',
+  },
+  'edits.copyAll': 'Скопировать все правки',
+  'edits.copyMarkdown': 'Markdown',
+  'edits.copyJson': 'JSON',
+  'edits.copiedMarkdown': 'Скопировано как Markdown',
+  'edits.copiedJson': 'Скопировано как JSON',
+  'edits.emptyTitle': 'Живых правок нет',
+  'edits.emptySub': 'Сдвинь, измени размер или скрой слой. Правка сохранится здесь и вернётся после перезагрузки страницы.',
+  'edits.missing': 'Не найдены на странице',
+  'edits.missingNote': 'Страница перезагрузилась без этих элементов, поэтому их правки не применены. Следующая перезагрузка попробует снова.',
+  'edits.discard': 'Убрать',
+  'edits.discardMissing': { one: 'Убрать {count}', few: 'Убрать все {count}', many: 'Убрать все {count}', other: 'Убрать все {count}' },
+  'edits.here': 'На этой странице',
+  'edits.reset': 'Сбросить',
+  'edits.elsewhere': 'Другие страницы',
 
   'ago.now': 'только что',
   'ago.min': '{count} мин',

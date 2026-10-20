@@ -25,14 +25,20 @@ import {
 import { AndroidAdapter, classifyCaptureError } from './android.ts'
 import { Coalescer, FrameCache, parseFrameParam } from './androidCapture.ts'
 import { loadConfig, type Config } from './config.ts'
+import { probeFraming, ProbeError } from './framingProbe.ts'
+import { startFramingProxy, type FramingProxy } from './framingProxy.ts'
 import { errorText, resolveLocale, t } from './i18n.ts'
 import {
   checkApiRequest,
   checkShutdownRequest,
   checkStaticRequest,
+  checkStreamUpgrade,
   checkWsUpgrade,
   resolveStaticPath,
+  wsRouteOf,
 } from './security.ts'
+import { encodePacket, type StreamErrorCode, type StreamToUi } from '../shared/stream.ts'
+import { resolveScrcpyServer, ScrcpyStream } from './scrcpyStream.ts'
 import { Session } from './session.ts'
 import { parseUiMessage } from './uiMessage.ts'
 import { WaitHub } from './waiters.ts'
@@ -115,6 +121,10 @@ let androidFrame = 0
 const androidFrames = new FrameCache<Buffer>()
 /** Last picture failure logged, so a device that keeps failing logs it once, not on every poll. */
 let lastFrameWarning = ''
+/** Window sockets whose last `androidCapture` said the live video shows the picture (`picture: false`). */
+const videoWindows = new Set<WebSocket>()
+/** Running scrcpy servers, one per `/ws/stream` socket; stopped with their socket and on shutdown. */
+const streams = new Set<ScrcpyStream>()
 
 /**
  * One device capture at a time, whoever asks: every open window polls, and each poll
@@ -126,14 +136,16 @@ const androidCaptures = android
       // A live edit or a reset that lands while this capture runs makes its picture stale:
       // it is then not kept, and the window fetches the frame live (androidFrames.put).
       const takenAt = androidFrames.epoch
-      const { snapshot, png, pngError } = await android.captureFrame()
+      // Windows that show the live video need the tree only: the PNG is most of a capture's time.
+      const withPicture = clients.size === 0 || [...clients].some((ws) => !videoWindows.has(ws))
+      const { snapshot, png, pngError } = await android.captureFrame(withPicture)
       session.setSnapshot(snapshot)
       noteSnapshot(snapshot)
       androidFrame++
       if (png) {
         androidFrames.put(androidFrame, png, takenAt)
         lastFrameWarning = ''
-      } else {
+      } else if (pngError) {
         const why = errorText('en', pngError)
         if (why !== lastFrameWarning) {
           console.warn(`[layout-debug] the device picture of a capture failed (${why}); the window asks for it again`)
@@ -495,6 +507,33 @@ function waitForRequest(url: URL, req: IncomingMessage, res: ServerResponse) {
   )
 }
 
+/** Origins the framing probe may fetch besides loopback: the configured target (it may be remote). */
+function probeOrigins(): string[] {
+  const origins: string[] = []
+  try {
+    origins.push(new URL(config.targetUrl).origin)
+  } catch {
+    // not a URL: nothing to add
+  }
+  return origins
+}
+
+/**
+ * The window asks which framing headers the page it frames sends, to name the one that keeps
+ * the page out instead of a generic "inspector didn't respond" (src/shared/framing.ts).
+ */
+async function serveFramingProbe(url: URL, req: IncomingMessage, res: ServerResponse) {
+  if (req.method !== 'GET') {
+    res.setHeader('allow', 'GET')
+    return sendJson(res, { error: `use GET for /api/framing, not ${req.method}` }, 405)
+  }
+  try {
+    sendJson(res, await probeFraming(url.searchParams.get('url'), probeOrigins()))
+  } catch (err) {
+    sendJson(res, { error: (err as Error).message }, err instanceof ProbeError ? err.status : 500)
+  }
+}
+
 function health(): HealthResponse {
   return {
     ok: true,
@@ -537,6 +576,16 @@ function serveApi(url: URL, req: IncomingMessage, res: ServerResponse) {
         return sendJson(res, { ok: true })
       }
       return sendJson(res, { requests: session.requests })
+    case '/api/framing':
+      return void serveFramingProbe(url, req, res)
+    case '/api/live-edits':
+      // DELETE discards every live edit: the windows drop them from their pages too.
+      if (req.method === 'DELETE') {
+        session.setLiveEdits([])
+        broadcast({ t: 'liveEdits', edits: session.liveEdits })
+        return sendJson(res, { ok: true })
+      }
+      return sendJson(res, { edits: session.liveEdits })
     case '/api/requests/consume':
       return void consumeRequests(req, res)
     case '/api/requests/wait':
@@ -557,8 +606,7 @@ function serveApi(url: URL, req: IncomingMessage, res: ServerResponse) {
 // --- websocket --------------------------------------------------------------
 
 const wss = new WebSocketServer({
-  server: http,
-  path: '/ws',
+  noServer: true,
   // WebSockets are exempt from CORS: without this any open tab could drive the queue and the device.
   verifyClient: ({ req }, done) => {
     const verdict = checkWsUpgrade(req.headers)
@@ -567,8 +615,31 @@ const wss = new WebSocketServer({
     done(false, 403, 'Forbidden')
   },
 })
-// Listen errors (port taken) reach ws too; they are reported once, on `http` below.
+/** `/ws/stream`: the Android screen as live video, one scrcpy run per socket (see openStream). */
+const streamWss = new WebSocketServer({
+  noServer: true,
+  verifyClient: ({ req }, done) => {
+    const verdict = checkStreamUpgrade(req.headers)
+    if (verdict.ok) return done(true)
+    console.warn(`[layout-debug] rejected the video WebSocket: ${verdict.reason}`)
+    done(false, 403, 'Forbidden')
+  },
+})
 wss.on('error', () => {})
+streamWss.on('error', () => {})
+
+// Two socket paths on one port: a WebSocketServer with `path` refuses every other path
+// with 400 itself, so the handshake is routed here instead.
+http.on('upgrade', (req, socket, head) => {
+  const route = wsRouteOf(req.url)
+  if (!route) {
+    console.warn(`[layout-debug] rejected WebSocket to ${req.url}: unknown path`)
+    socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+    return
+  }
+  const server = route === 'window' ? wss : streamWss
+  server.handleUpgrade(req, socket, head, (ws) => server.emit('connection', ws, req))
+})
 
 function send(ws: WebSocket, msg: ServerToUi) {
   // Only the code: the message is page or device text. Repeats are capped per code (telemetry rate guard).
@@ -608,6 +679,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     clients.delete(ws)
     clientLocales.delete(ws)
+    videoWindows.delete(ws)
     lastWindowAt = Date.now()
   })
   void greet(ws)
@@ -631,8 +703,11 @@ function greet(ws: WebSocket) {
     deviceModel,
     listening: hub.listening,
     telemetry: { enabled: telemetry.enabled, showNotice: telemetry.windowNoticePending() },
+    framingProxy: framingProxy ? { origin: framingProxy.origin, target: framingProxy.target } : null,
   })
   send(ws, { t: 'requests', requests: session.requests })
+  // A reloaded window puts these back on its page (and lists the ones it cannot place).
+  send(ws, { t: 'liveEdits', edits: session.liveEdits })
   // Replay the thread so a reloaded window does not come back blank.
   for (const message of session.chat) send(ws, { t: 'chat', message })
   if (android) void captureAndroid(ws)
@@ -672,6 +747,11 @@ function onUiMessage(ws: WebSocket, raw: unknown) {
       session.overrides = msg.overrides
       if (msg.overrides.length) usage.liveEdits++
       break
+    case 'liveEdits':
+      session.setLiveEdits(msg.edits)
+      // The sender holds this list already; the other windows adopt it.
+      for (const other of clients) if (other !== ws) send(other, { t: 'liveEdits', edits: session.liveEdits })
+      break
     case 'telemetryNoticeDismissed':
       telemetry.dismissWindowNotice()
       break
@@ -684,9 +764,11 @@ function onUiMessage(ws: WebSocket, raw: unknown) {
       clearChat()
       break
     case 'submit':
-      handleSubmit(ws, msg.comment)
+      handleSubmit(ws, msg.comment, msg.page)
       break
     case 'androidCapture':
+      if (msg.picture === false) videoWindows.add(ws)
+      else videoWindows.delete(ws)
       void captureAndroid(ws)
       break
     case 'androidOverride':
@@ -775,13 +857,82 @@ async function clearAndroidOverrides(ws: WebSocket) {
   }
 }
 
+/** A video socket that has fallen this far behind drops frames until the next key frame. */
+const STREAM_BACKLOG_BYTES = 8 * 1024 * 1024
+
+streamWss.on('connection', (ws) => void openStream(ws))
+
+/**
+ * One `/ws/stream` socket: start scrcpy-server on the device and relay its H.264 packets
+ * (src/shared/stream.ts). The run lives exactly as long as the socket — the window closing,
+ * reloading or switching the video off stops it — and any failure is sent to the window as
+ * a coded error before the socket closes, so it can fall back to snapshots and say why.
+ */
+async function openStream(ws: WebSocket) {
+  const say = (msg: StreamToUi) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg))
+  }
+  const refuse = (code: StreamErrorCode, detail: string) => {
+    say({ t: 'error', code, detail })
+    ws.close(1000)
+  }
+  if (!android) return refuse('not_android', 'the server runs with LD_TARGET=web')
+
+  let stream: ScrcpyStream | null = null
+  let closed = false
+  ws.on('close', () => {
+    closed = true
+    stream?.stop()
+  })
+  ws.on('error', () => {})
+
+  const found = await resolveScrcpyServer({ server: config.scrcpyServer, version: config.scrcpyVersion })
+  if (closed) return
+  if (!found.ok) {
+    console.warn(`[layout-debug] live video unavailable (${found.code}): ${found.detail}`)
+    return refuse(found.code, found.detail)
+  }
+  const { jar, version } = found.file
+  console.log(`[layout-debug] live video: starting scrcpy-server ${version} (${jar})`)
+  say({ t: 'starting', version })
+
+  let dropping = false
+  let packets = 0
+  const run: ScrcpyStream = new ScrcpyStream(config.device, found.file, {
+    event(e) {
+      if (e.kind === 'session') return say({ t: 'session', width: e.width, height: e.height })
+      if (e.kind !== 'packet' || ws.readyState !== ws.OPEN) return
+      if (!e.config) {
+        // A frame depends on the ones before it: once one is dropped, the rest wait for a key frame.
+        const behind = ws.bufferedAmount > STREAM_BACKLOG_BYTES
+        if (behind && !dropping) console.warn('[layout-debug] live video: the window falls behind, dropping frames until the next key frame')
+        if (behind || (dropping && !e.key)) {
+          dropping = true
+          return
+        }
+        dropping = false
+      }
+      if (++packets === 2) console.log(`[layout-debug] live video: streaming (scid ${run.scid})`)
+      ws.send(encodePacket(e))
+    },
+    end(failure) {
+      streams.delete(run)
+      if (failure) refuse(failure.code, failure.detail)
+      else console.log(`[layout-debug] live video: stopped (scid ${run.scid})`)
+    },
+  })
+  stream = run
+  streams.add(run)
+  await run.start()
+}
+
 /**
  * The window sent an edit. It goes to the queue as `queued`; a listening agent gets
  * it through wait_for_message (now, or on its next call), any agent through
  * pending_requests. With no agent listening the window says so in the chat.
  */
-function handleSubmit(ws: WebSocket, comment: string) {
-  const request = session.buildRequest(comment)
+function handleSubmit(ws: WebSocket, comment: string, page?: string) {
+  const request = session.buildRequest(comment, page)
   if (!request) {
     send(ws, { t: 'error', code: 'nothing_selected', message: t(localeOf(ws), 'nothingToSubmit') })
     send(ws, { t: 'chatDone' })
@@ -833,10 +984,17 @@ function shutdown(code: number, reason: 'idle' | 'signal' | 'api_shutdown') {
     agent_listened: usage.agentListened,
   })
   hub.close()
+  // Before the exit: each removes its adb forward, and its device server ends with the socket.
+  for (const s of streams) s.stopSync()
+  streams.clear()
   for (const ws of clients) ws.terminate()
+  for (const ws of streamWss.clients) ws.terminate()
+  streamWss.close()
   wss.close()
   http.close()
   http.closeAllConnections?.()
+  framingProxy?.server.close()
+  framingProxy?.server.closeAllConnections?.()
   process.exitCode = code
   // Let the last log line and response flush; telemetry gets at most its flush deadline.
   void telemetry.flush().then(() => setTimeout(() => process.exit(code), 50).unref())
@@ -895,15 +1053,48 @@ http.on('error', async (err: NodeJS.ErrnoException) => {
       : err.code === 'EACCES'
         ? `no permission to listen on port ${SERVER_PORT} (set LD_SERVER_PORT to another port)`
         : err.message
+  await failStart(why, err.code)
+})
+
+/** A listen error (server or framing proxy) ends the start: the failure line, its telemetry reason, exit 1. */
+async function failStart(why: string, code: string | undefined): Promise<never> {
   // scripts/dev.mjs and open_window watch for this line (shared/devMarkers.mjs).
   console.error(serverFailedLine(why))
   telemetry.track({
     type: 'server_start_failed',
-    reason: err.code === 'EADDRINUSE' ? 'port_in_use' : err.code === 'EACCES' ? 'port_access' : 'other',
+    reason: code === 'EADDRINUSE' ? 'port_in_use' : code === 'EACCES' ? 'port_access' : 'other',
   })
   await telemetry.flush()
   process.exit(1)
-})
+}
+
+/**
+ * Opt-in (LD_FRAMING_PROXY=1): the target without the headers that forbid framing, on its own
+ * loopback port. Started before the server reports ready, so a taken port stops the start
+ * with a message instead of a window that can't show the page.
+ */
+let framingProxy: FramingProxy | null = null
+if (config.framingProxyPort !== null) {
+  try {
+    framingProxy = await startFramingProxy({
+      port: config.framingProxyPort,
+      targetUrl: config.targetUrl,
+      windowOrigins: WINDOW_ORIGINS,
+      unreachableText: (target, reason) => t(uiLocale, 'framingProxyUnreachable', { target, reason }),
+    })
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    const port = config.framingProxyPort
+    await failStart(
+      code === 'EADDRINUSE'
+        ? `the framing proxy port ${port} is already in use; set LD_FRAMING_PROXY_PORT to a free port`
+        : code === 'EACCES'
+          ? `no permission to listen on the framing proxy port ${port} (set LD_FRAMING_PROXY_PORT to another port)`
+          : `the framing proxy could not start: ${(err as Error).message}`,
+      code,
+    )
+  }
+}
 
 // Loopback only: the API exposes the queue, the chat and the phone's screen.
 http.listen(SERVER_PORT, LISTEN_HOST, async () => {
@@ -937,6 +1128,12 @@ http.listen(SERVER_PORT, LISTEN_HOST, async () => {
     })
   } else {
     console.log(`[layout-debug] target: ${config.targetUrl}`)
+    if (framingProxy) {
+      console.log(
+        `[layout-debug] framing proxy: ${framingProxy.origin} → ${framingProxy.target} ` +
+          '(drops X-Frame-Options and CSP frame-ancestors; only this window may frame it)',
+      )
+    }
     telemetry.track({ type: 'server_started', target: config.target, config_file: Boolean(config.configFile) })
   }
   console.log(`[layout-debug] project: ${config.projectDir}`)

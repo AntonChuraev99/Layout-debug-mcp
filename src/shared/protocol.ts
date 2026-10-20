@@ -61,6 +61,11 @@ export interface LayoutNode {
 
 export interface Snapshot {
   id: string
+  /**
+   * Web: the document the inspector runs in (random per page load). Node ids start over in
+   * every document, so a new `docId` is a new page even when it arrives before the frame's `load`.
+   */
+  docId?: string
   target: TargetKind
   createdAt: number
   /** The unit an agent should write into code: css-px on web, dp on Android. */
@@ -92,8 +97,8 @@ export interface AndroidApp {
 }
 
 /**
- * A live, in-memory tweak. Never written to disk, never survives a reload —
- * turning one into real code is what the agent is for.
+ * A live, in-memory tweak of one element. Never written to disk; the window puts it back
+ * after a reload through `LiveEdit` — turning one into real code is what the agent is for.
  */
 export interface Override {
   nodeId: NodeId
@@ -102,6 +107,31 @@ export interface Override {
   width?: number
   height?: number
   hidden?: boolean
+}
+
+/**
+ * A live edit addressed by its element's anchors instead of a node id, so it outlives a
+ * reload of the target. The server keeps the list (`liveEdits`); the window re-applies it
+ * to every page that comes in (`src/shared/liveEdits.ts`).
+ */
+export interface LiveEdit {
+  /** Where it was made: the window's page address (web) or the app package (Android). */
+  page: string
+  target: TargetKind
+  kind: string
+  label: string
+  anchors: Anchors
+  /**
+   * Which of the elements with these anchors (path + source location) it is, in snapshot
+   * order: always 0 on web, the item's place among same-path siblings on Android.
+   */
+  occurrence: number
+  /** Frame pixels. `nodeId` is the element's id where it last resolved. */
+  override: Override
+  unit: 'css-px' | 'dp'
+  pxPerUnit: number
+  /** False: the last page that came in had no element with these anchors. */
+  resolved: boolean
 }
 
 /** What the agent receives. The whole point of the tool. */
@@ -128,6 +158,10 @@ export interface EditRequest {
   /** Divide any measurement here by this to get the number that belongs in source. */
   pxPerUnit: number
   consumed: boolean
+  /** The page the window sent it from (its `LiveEdit.page`); absent from older windows. */
+  page?: string
+  /** `LiveEdit.occurrence` of the element at send time, so the right live edit leaves the list at "done". */
+  occurrence?: number
   /**
    * Current lifecycle status, owned by the server (see `RequestStatus`). Every
    * `requests` broadcast carries it, so a window that connects late gets the state
@@ -318,6 +352,27 @@ export interface HealthResponse {
   projectDir: string
 }
 
+/**
+ * GET /api/framing?url=<frame address>: the framing headers of the page the window frames,
+ * after redirects (src/shared/framing.ts decides whether they block). Loopback addresses and
+ * the configured target only.
+ */
+export interface FramingProbeResponse {
+  /** The address the redirects ended on. */
+  url: string
+  status: number
+  xFrameOptions: string | null
+  contentSecurityPolicy: string | null
+}
+
+/** The opt-in framing proxy: the window loads `origin` in place of `target` (src/server/framingProxy.ts). */
+export interface FramingProxyInfo {
+  /** `http://127.0.0.1:<port>`. */
+  origin: string
+  /** The proxied target origin. */
+  target: string
+}
+
 /** Error body of every /api/* failure (4xx/5xx). */
 export interface ApiErrorBody {
   error: string
@@ -332,14 +387,21 @@ export type UiToServer =
   | { t: 'snapshot'; snapshot: Snapshot }
   | { t: 'select'; nodeId: NodeId | null }
   | { t: 'overrides'; overrides: Override[] }
-  | { t: 'submit'; comment: string }
+  /** The whole live edit list, by anchors: the server keeps it and tells the other windows. */
+  | { t: 'liveEdits'; edits: LiveEdit[] }
+  /** `page`: the live edit page the window is on (see `EditRequest.page`). */
+  | { t: 'submit'; comment: string; page?: string }
   | { t: 'clearRequests' }
   /** Empties the server's chat history; every window gets `chatCleared`. */
   | { t: 'clearChat' }
   /** The user closed the one-time telemetry notice; the server remembers it in the telemetry state file. */
   | { t: 'telemetryNoticeDismissed' }
   // --- android target: the device is reachable only through the server ---
-  | { t: 'androidCapture' }
+  /**
+   * `picture: false`: this window shows the live video (src/shared/stream.ts) and needs only
+   * the tree; the server then skips the device screenshot while every window says so.
+   */
+  | { t: 'androidCapture'; picture?: boolean }
   | { t: 'androidOverride'; override: Override }
   | { t: 'androidClearOverrides' }
 
@@ -363,6 +425,8 @@ export type ServerToUi =
        * (enabled and not dismissed yet); closing it sends `telemetryNoticeDismissed`.
        */
       telemetry: { enabled: boolean; showNotice: boolean }
+      /** The framing proxy, when it is on (web target, LD_FRAMING_PROXY=1); absent from older servers. */
+      framingProxy?: FramingProxyInfo | null
     }
   /**
    * The "agent listening" state changed. Listening = a wait_for_message call is open, one
@@ -376,6 +440,11 @@ export type ServerToUi =
   /** The chat history was cleared (from a window or `DELETE /api/chat`): drop every message. */
   | { t: 'chatCleared' }
   | { t: 'requests'; requests: EditRequest[] }
+  /**
+   * The live edit list the server keeps: sent on every connect (after `ready`) and to the
+   * other windows when one of them changes it. It outlives a reload of the page and of the window.
+   */
+  | { t: 'liveEdits'; edits: LiveEdit[] }
   /**
    * One EditRequest changed status. Broadcast to every window on each transition.
    * Late windows get current status from `EditRequest.status` in the `requests` frame.
